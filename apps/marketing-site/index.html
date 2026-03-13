@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MTM Logix | AI-Powered Logistics Control Tower</title>
+    <meta
+      name="description"
+      content="MTM Logix helps importers and exporters reduce landed cost and improve shipment visibility with an AI-powered logistics control tower."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="site-bg" aria-hidden="true"></div>
+    <header class="nav">
+      <a class="brand" href="#">
+        <span class="brand-dot"></span>
+        MTM Logix
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#solution">Solution</a>
+        <a href="#proof">Proof</a>
+        <a href="#contact">Contact</a>
+      </nav>
+      <a class="btn btn-sm" href="#contact">Book demo</a>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">AI control tower for global logistics</p>
+        <h1>Cut landed logistics costs. Gain real-time shipment control.</h1>
+        <p class="lead">
+          MTM Logix connects fragmented freight data, predicts disruptions, and
+          gives your team one place to act fast across ocean, drayage, and
+          inland operations.
+        </p>
+        <div class="hero-actions">
+          <a class="btn" href="#contact">Book a demo</a>
+          <a class="btn btn-ghost" href="#proof">See outcomes</a>
+        </div>
+        <ul class="metrics" id="proof">
+          <li>
+            <span class="metric-value" data-target="16">0</span>
+            <span class="metric-label">% cost reduction</span>
+          </li>
+          <li>
+            <span class="metric-value" data-target="35">0</span>
+            <span class="metric-label">% fewer delays</span>
+          </li>
+          <li>
+            <span class="metric-value" data-target="99">0</span>
+            <span class="metric-label">% shipment transparency</span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel-grid" id="solution">
+        <article class="panel">
+          <h2>Unified visibility</h2>
+          <p>
+            Track booking, container, milestone, and exception status in one
+            workspace instead of scattered emails and spreadsheets.
+          </p>
+        </article>
+        <article class="panel">
+          <h2>Predictive alerts</h2>
+          <p>
+            Use AI to detect schedule drift and cost risk early so planners can
+            rebalance before disruptions hit service levels.
+          </p>
+        </article>
+        <article class="panel">
+          <h2>Actionable workflows</h2>
+          <p>
+            Trigger owner assignments, carrier follow-ups, and customer updates
+            from one control tower workflow.
+          </p>
+        </article>
+      </section>
+
+      <section class="proof">
+        <h2>Built for importers, exporters, and logistics teams that move fast.</h2>
+        <p>
+          We deploy with your existing stack and focus on measurable outcomes:
+          cost, reliability, and customer experience.
+        </p>
+      </section>
+
+      <section class="snake panel" id="snake">
+        <div class="snake-header">
+          <h2>Snake</h2>
+          <p class="snake-help">
+            Use arrow keys or WASD. Press space to pause.
+          </p>
+        </div>
+        <div class="snake-meta">
+          <p>Score: <strong id="snake-score">0</strong></p>
+          <p>Status: <strong id="snake-status">Running</strong></p>
+        </div>
+        <div class="snake-actions">
+          <button class="btn btn-sm btn-ghost" id="snake-pause" type="button">
+            Pause
+          </button>
+          <button class="btn btn-sm" id="snake-restart" type="button">
+            Restart
+          </button>
+        </div>
+        <div
+          id="snake-board"
+          class="snake-board"
+          role="grid"
+          aria-label="Snake game board"
+        ></div>
+        <div class="snake-controls" aria-label="Snake controls">
+          <button class="snake-control" type="button" data-direction="up" aria-label="Move up">↑</button>
+          <button class="snake-control" type="button" data-direction="left" aria-label="Move left">←</button>
+          <button class="snake-control" type="button" data-direction="down" aria-label="Move down">↓</button>
+          <button class="snake-control" type="button" data-direction="right" aria-label="Move right">→</button>
+        </div>
+      </section>
+
+      <section class="contact" id="contact">
+        <div class="contact-copy">
+          <p class="eyebrow">Request a strategy session</p>
+          <h2>Tell us your shipping challenges.</h2>
+          <p>
+            Share your lanes, volume, and current bottlenecks. We will map a
+            practical rollout plan and expected ROI.
+          </p>
+          <p class="small-note">
+            Replace the iframe URL in <code>apps/marketing-site/index.html</code> with your
+            ClickUp form share link.
+          </p>
+        </div>
+        <div class="contact-form-wrap">
+          <iframe
+            title="MTM Logix discovery form"
+            src="https://forms.clickup.com/REPLACE-WITH-YOUR-FORM-ID"
+            loading="lazy"
+            referrerpolicy="strict-origin-when-cross-origin"
+          ></iframe>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>© <span id="year"></span> MTM Logix. All rights reserved.</p>
+    </footer>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

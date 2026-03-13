@@ -1,0 +1,37 @@
+from dataclasses import dataclass, field
+from datetime import datetime
+
+
+@dataclass
+class ShipmentRef:
+    task_id: str
+    task_name: str
+    shipping_line: str
+    booking_no: str | None
+    container_no: str | None
+    list_id: str
+    list_name: str | None = None
+    last_checked_at: datetime | None = None
+
+
+@dataclass
+class ShipmentStatus:
+    status_text: str
+    location: str | None = None
+    event_time: datetime | None = None
+    eta_time: datetime | None = None
+    eta_local_text: str | None = None
+    latest_move: "MovementEvent | None" = None
+    recent_moves: list["MovementEvent"] = field(default_factory=list)
+    raw_source: str | None = None
+    source_url: str | None = None
+    movement_details: str | None = None
+
+
+@dataclass
+class MovementEvent:
+    name: str
+    location: str | None = None
+    event_time: datetime | None = None
+    event_time_local_text: str | None = None
+    event_state: str | None = None

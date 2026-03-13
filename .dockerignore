@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+.DS_Store
+artifacts
+build
+output
+website
+config/local
+*.pyc
+__pycache__
+*.log
+*.sqlite
+*.db
+MTM Track and Trace.app

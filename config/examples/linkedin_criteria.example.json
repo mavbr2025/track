@@ -1,0 +1,55 @@
+{
+  "jobs": [
+    {
+      "job_id": "senior-backend-engineer",
+      "job_name": "Senior Backend Engineer",
+      "titles": [
+        "Senior Backend Engineer",
+        "Senior Python Engineer",
+        "Staff Backend Engineer"
+      ],
+      "locations": [
+        "United States",
+        "Remote"
+      ],
+      "skills": [
+        "Python",
+        "Django",
+        "FastAPI",
+        "AWS"
+      ],
+      "include_keywords": [
+        "hiring",
+        "open to work"
+      ],
+      "exclude_keywords": [
+        "intern",
+        "student"
+      ],
+      "max_results": 30
+    },
+    {
+      "job_id": "technical-recruiter",
+      "job_name": "Technical Recruiter",
+      "titles": [
+        "Technical Recruiter",
+        "Talent Acquisition Partner"
+      ],
+      "locations": [
+        "United States"
+      ],
+      "skills": [
+        "engineering hiring",
+        "sourcing"
+      ],
+      "include_keywords": [
+        "SaaS"
+      ],
+      "exclude_keywords": [
+        "intern"
+      ],
+      "max_results": 20
+    }
+  ]
+}
+

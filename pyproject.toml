@@ -1,0 +1,37 @@
+[project]
+name = "shipment-clickup-sync"
+version = "0.1.0"
+description = "Sync shipment status from carrier websites/APIs to ClickUp tasks"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116.0",
+  "requests>=2.32.0",
+  "python-dotenv>=1.0.1",
+  "uvicorn>=0.35.0",
+]
+
+[project.optional-dependencies]
+browser = [
+  "playwright>=1.50.0",
+]
+
+[project.scripts]
+shipment-sync = "shipment_sync.main:main"
+shipment-api = "shipment_sync.api:main"
+clickup-oauth = "shipment_sync.clickup_oauth_main:main"
+clickup-ap-invoices = "shipment_sync.ap_main:main"
+contacts-sync = "shipment_sync.contacts_main:main"
+linkedin-candidates = "shipment_sync.linkedin_candidates_main:main"
+linkedin-copilot = "shipment_sync.linkedin_copilot_main:main"
+clickup-fields-export = "shipment_sync.clickup_fields_main:main"
+clickup-workspace-audit = "shipment_sync.clickup_audit_main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,23 @@
+{
+  "campaign_name": "Q2 Relationship Reconnect",
+  "goal": "reconnect with logistics and operations contacts for discovery conversations",
+  "audience_notes": "Focus on people with supply chain or freight responsibility in US and LATAM.",
+  "tone": "professional, concise, and warm",
+  "cta": "Would you be open to a short call next week to exchange notes?",
+  "comment_focus": "practical execution and measurable outcomes",
+  "max_drafts": 25,
+  "min_score": 45,
+  "connected_within_days": 365,
+  "include_unknown_connection_date": true,
+  "include_titles": [],
+  "exclude_titles": [
+    "intern",
+    "student"
+  ],
+  "include_companies": [],
+  "exclude_companies": [],
+  "use_ai_drafts": false,
+  "ai_model": "gpt-4.1-mini",
+  "ai_timeout_seconds": 45,
+  "ai_max_output_tokens": 220
+}

@@ -1,0 +1,60 @@
+services:
+  - type: web
+    name: shipment-api
+    runtime: docker
+    plan: starter
+    repo: https://github.com/mavbr2025/track
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: commit
+    healthCheckPath: /health
+    envVars:
+      - key: SHIPMENT_API_HOST
+        value: 0.0.0.0
+      - key: SHIPMENT_API_TRIGGER_TOKEN
+        generateValue: true
+      - key: SHIPMENT_PREFLIGHT_ENABLED
+        value: "true"
+      - key: SHIPMENT_MIN_SYNC_INTERVAL_HOURS
+        value: "2"
+      - key: CLICKUP_DISCOVER_LISTS_FROM_SPACES
+        value: "true"
+      - key: MSC_USE_PLAYWRIGHT
+        value: "true"
+      - key: MSC_PLAYWRIGHT_REQUIRED
+        value: "true"
+      - key: MSC_PLAYWRIGHT_BROWSER
+        value: "chromium"
+      - key: MSC_PLAYWRIGHT_CHANNEL
+        value: ""
+      - key: MSC_PLAYWRIGHT_HEADLESS
+        value: "true"
+
+  - type: cron
+    name: track-trace-cron
+    runtime: docker
+    plan: starter
+    repo: https://github.com/mavbr2025/track
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    schedule: "0 */2 * * *"
+    dockerCommand: ./scripts/run_sync.sh
+    envVars:
+      - key: SHIPMENT_PREFLIGHT_ENABLED
+        value: "true"
+      - key: SHIPMENT_MIN_SYNC_INTERVAL_HOURS
+        value: "2"
+      - key: CLICKUP_DISCOVER_LISTS_FROM_SPACES
+        value: "true"
+      - key: MSC_USE_PLAYWRIGHT
+        value: "true"
+      - key: MSC_PLAYWRIGHT_REQUIRED
+        value: "true"
+      - key: MSC_PLAYWRIGHT_BROWSER
+        value: "chromium"
+      - key: MSC_PLAYWRIGHT_CHANNEL
+        value: ""
+      - key: MSC_PLAYWRIGHT_HEADLESS
+        value: "true"

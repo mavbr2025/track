@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+import re
+import time
+from typing import Any
+
+import requests
+
+_DCSA_TRANSPORT_LABELS: dict[str, str] = {
+    "ARRI": "Transport Arrived (ARRI)",
+    "DEPA": "Transport Departed (DEPA)",
+}
+
+_DCSA_EQUIPMENT_LABELS: dict[str, str] = {
+    "LOAD": "Container Loaded (LOAD)",
+    "DISC": "Container Discharged (DISC)",
+    "GTIN": "Container Gated In (GTIN)",
+    "GTOT": "Container Gated Out (GTOT)",
+    "STUF": "Container Stuffed (STUF)",
+    "STRP": "Container Stripped (STRP)",
+    "PICK": "Container Picked Up (PICK)",
+    "DROP": "Container Dropped Off (DROP)",
+    "INSP": "Container Inspected (INSP)",
+    "RSEA": "Container Resealed (RSEA)",
+    "RMVD": "Seal Removed (RMVD)",
+}
+
+_DCSA_SHIPMENT_LABELS: dict[str, str] = {
+    "RECE": "Shipment Received (RECE)",
+    "DRFT": "Shipment Drafted (DRFT)",
+    "PENA": "Shipment Pending Approval (PENA)",
+    "PENU": "Shipment Pending Update (PENU)",
+    "REJE": "Shipment Rejected (REJE)",
+    "APPR": "Shipment Approved (APPR)",
+    "ISSU": "Shipment Issued (ISSU)",
+    "SURR": "Shipment Surrendered (SURR)",
+    "SUBM": "Shipment Submitted (SUBM)",
+    "VOID": "Shipment Voided (VOID)",
+    "CONF": "Shipment Confirmed (CONF)",
+    "REQS": "Shipment Requested (REQS)",
+    "CMPL": "Shipment Completed (CMPL)",
+    "HOLD": "Shipment On Hold (HOLD)",
+    "RELS": "Shipment Released (RELS)",
+}
+
+
+def to_dcsa_movement_name(
+    *,
+    event: dict[str, Any] | None = None,
+    fallback_name: str | None = None,
+    event_type: str | None = None,
+    transport_event_code: str | None = None,
+    equipment_event_code: str | None = None,
+    shipment_event_code: str | None = None,
+) -> str:
+    event_type_code = _normalized_code(
+        event_type
+        or (extract_first(event, ["eventType"]) if event is not None else None)
+    )
+    transport_code = _normalized_code(
+        transport_event_code
+        or (extract_first(event, ["transportEventTypeCode"]) if event is not None else None)
+    )
+    equipment_code = _normalized_code(
+        equipment_event_code
+        or (extract_first(event, ["equipmentEventTypeCode"]) if event is not None else None)
+    )
+    shipment_code = _normalized_code(
+        shipment_event_code
+        or (extract_first(event, ["shipmentEventTypeCode"]) if event is not None else None)
+    )
+
+    if equipment_code and equipment_code in _DCSA_EQUIPMENT_LABELS:
+        return _DCSA_EQUIPMENT_LABELS[equipment_code]
+    if transport_code and transport_code in _DCSA_TRANSPORT_LABELS:
+        return _DCSA_TRANSPORT_LABELS[transport_code]
+    if shipment_code and shipment_code in _DCSA_SHIPMENT_LABELS:
+        return _DCSA_SHIPMENT_LABELS[shipment_code]
+
+    guessed = _guess_dcsa_label_from_text(fallback_name)
+    if guessed:
+        return guessed
+
+    if event_type_code == "TRANSPORT":
+        return "Transport Event"
+    if event_type_code == "EQUIPMENT":
+        return "Equipment Event"
+    if event_type_code == "SHIPMENT":
+        return "Shipment Event"
+
+    if fallback_name and fallback_name.strip():
+        return fallback_name.strip()
+    return "Unknown move"
+
+
+def extract_first(payload: Any, candidate_keys: list[str]) -> str | None:
+    wanted = {k.lower() for k in candidate_keys}
+    queue = [payload]
+    while queue:
+        item = queue.pop(0)
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if key.lower() in wanted and isinstance(value, (str, int, float)):
+                    return str(value)
+                queue.append(value)
+        elif isinstance(item, list):
+            queue.extend(item)
+    return None
+
+
+def parse_event_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+
+    try:
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        dt = _parse_datetime_fallback(candidate)
+        if dt is None:
+            return None
+
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def extract_eta_time(payload: Any) -> datetime | None:
+    eta_raw = extract_first(
+        payload,
+        [
+            "eta",
+            "etaDate",
+            "etaTime",
+            "etaDateTime",
+            "estimatedArrival",
+            "estimatedArrivalDate",
+            "estimatedArrivalTime",
+            "estimatedArrivalDateTime",
+            "estimatedTimeOfArrival",
+            "arrivalEstimate",
+            "arrivalEstimatedTime",
+            "arrivalDateEstimated",
+            "plannedArrival",
+            "plannedArrivalDate",
+            "plannedArrivalTime",
+            "plannedArrivalDateTime",
+            "scheduledArrival",
+            "scheduledArrivalDate",
+            "scheduledArrivalTime",
+            "scheduledArrivalDateTime",
+            "vesselEta",
+            "destinationEta",
+            "podEta",
+            "dischargeEta",
+        ],
+    )
+    return parse_event_time(eta_raw)
+
+
+def _parse_datetime_fallback(candidate: str) -> datetime | None:
+    formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(candidate, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def extract_json_from_http_response(response: requests.Response) -> dict:
+    content_type = (response.headers.get("content-type") or "").lower()
+    body = response.text
+    if "json" in content_type:
+        data = response.json()
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
+
+    match = re.search(
+        r"<script[^>]*id=[\"']__NEXT_DATA__[\"'][^>]*>(.*?)</script>",
+        body,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if match:
+        data = json.loads(match.group(1))
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
+
+    for m in re.finditer(r"<script[^>]*>(.*?)</script>", body, re.DOTALL | re.IGNORECASE):
+        script_body = m.group(1).strip()
+        if not script_body:
+            continue
+        if not (script_body.startswith("{") or script_body.startswith("[")):
+            continue
+        try:
+            data = json.loads(script_body)
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
+
+    raise ValueError("Could not parse JSON payload from tracking response")
+
+
+def get_with_retries(
+    session: requests.Session,
+    url: str,
+    *,
+    params: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: int = 45,
+    max_retries: int = 2,
+    retry_delay_seconds: float = 2.0,
+) -> requests.Response:
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = session.get(url, params=params, headers=headers, timeout=timeout_seconds)
+            response.raise_for_status()
+            return response
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= max_retries:
+                break
+            time.sleep(retry_delay_seconds * (attempt + 1))
+    if last_error:
+        raise last_error
+    raise RuntimeError("Request failed without specific error")
+
+
+def _normalized_code(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().upper()
+    return normalized or None
+
+
+def _guess_dcsa_label_from_text(name: str | None) -> str | None:
+    if not name:
+        return None
+    normalized = name.strip().lower()
+    if not normalized:
+        return None
+
+    if "booking confirmed" in normalized:
+        return _DCSA_SHIPMENT_LABELS["CONF"]
+    if "empty container returned from customer" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["GTIN"]
+    if "gate in" in normalized or "gated in" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["GTIN"]
+    if "gate out" in normalized or "gated out" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["GTOT"]
+    if "load on board" in normalized or "loaded" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["LOAD"]
+    if "discharge" in normalized or "unloaded" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["DISC"]
+    if "stuff" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["STUF"]
+    if "strip" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["STRP"]
+    if "pick up" in normalized or "pickup" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["PICK"]
+    if "drop off" in normalized or normalized.startswith("drop "):
+        return _DCSA_EQUIPMENT_LABELS["DROP"]
+    if "inspect" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["INSP"]
+    if "reseal" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["RSEA"]
+    if "seal removed" in normalized or ("remove" in normalized and "seal" in normalized):
+        return _DCSA_EQUIPMENT_LABELS["RMVD"]
+    if "arriv" in normalized:
+        return _DCSA_TRANSPORT_LABELS["ARRI"]
+    if "depart" in normalized or "sail" in normalized:
+        return _DCSA_TRANSPORT_LABELS["DEPA"]
+    return None

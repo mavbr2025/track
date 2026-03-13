@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
+
+
+@dataclass
+class TrackTraceConfigReport:
+    configured: bool
+    live_ready: bool
+    required_items: list[str]
+    missing_required_items: list[str]
+    recommended_items: list[str]
+    missing_recommended_items: list[str]
+    notes: list[str]
+
+
+@dataclass
+class ApiTriggerSettings:
+    trigger_token: str | None
+
+    @classmethod
+    def from_env(cls) -> "ApiTriggerSettings":
+        return cls(trigger_token=_optional("SHIPMENT_API_TRIGGER_TOKEN"))
+
+
+def inspect_track_trace_env() -> TrackTraceConfigReport:
+    required_items = [
+        "CLICKUP_OAUTH_ACCESS_TOKEN or CLICKUP_API_TOKEN",
+        "CLICKUP_LIST_ID",
+        "CLICKUP_CF_CONTAINER_NO",
+        "CLICKUP_CF_BOOKING_NO",
+        "CLICKUP_CF_SHIPPING_LINE",
+    ]
+    recommended_items = [
+        "SHIPMENT_API_TRIGGER_TOKEN",
+        "CLICKUP_CF_STATUS_LAST_CHECKED",
+        "CLICKUP_CF_SHIPMENT_STATUS",
+    ]
+
+    missing_required_items: list[str] = []
+    if not _optional("CLICKUP_OAUTH_ACCESS_TOKEN") and not _optional("CLICKUP_API_TOKEN"):
+        missing_required_items.append("CLICKUP_OAUTH_ACCESS_TOKEN or CLICKUP_API_TOKEN")
+    for key in (
+        "CLICKUP_LIST_ID",
+        "CLICKUP_CF_CONTAINER_NO",
+        "CLICKUP_CF_BOOKING_NO",
+        "CLICKUP_CF_SHIPPING_LINE",
+    ):
+        if not _optional(key):
+            missing_required_items.append(key)
+
+    missing_recommended_items: list[str] = []
+    for key in ("SHIPMENT_API_TRIGGER_TOKEN", "CLICKUP_CF_STATUS_LAST_CHECKED", "CLICKUP_CF_SHIPMENT_STATUS"):
+        if not _optional(key):
+            missing_recommended_items.append(key)
+    has_trigger_token = bool(_optional("SHIPMENT_API_TRIGGER_TOKEN"))
+
+    notes = [
+        "Set SHIPMENT_API_TRIGGER_TOKEN before exposing trigger endpoints publicly.",
+        "Use CLICKUP_CF_STATUS_LAST_CHECKED together with SHIPMENT_MIN_SYNC_INTERVAL_HOURS to avoid unnecessary carrier calls.",
+        "Use CLICKUP_CF_SHIPMENT_STATUS if you want the carrier status stored in a dedicated ClickUp custom field.",
+    ]
+
+    return TrackTraceConfigReport(
+        configured=not missing_required_items,
+        live_ready=not missing_required_items and has_trigger_token,
+        required_items=required_items,
+        missing_required_items=missing_required_items,
+        recommended_items=recommended_items,
+        missing_recommended_items=missing_recommended_items,
+        notes=notes,
+    )
+
+
+def _optional(key: str) -> str | None:
+    value = os.getenv(key)
+    if not value:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
