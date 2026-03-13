@@ -12,6 +12,8 @@ class ShipmentRef:
     list_id: str
     list_name: str | None = None
     last_checked_at: datetime | None = None
+    current_status_value: str | None = None
+    track_trace_snapshot_hash: str | None = None
 
 
 @dataclass
@@ -35,3 +37,10 @@ class MovementEvent:
     event_time: datetime | None = None
     event_time_local_text: str | None = None
     event_state: str | None = None
+
+
+@dataclass
+class ShipmentWriteResult:
+    changed: bool
+    status_value: str
+    snapshot_hash: str

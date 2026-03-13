@@ -71,6 +71,7 @@ To cover all open shipments across multiple lists, you can target by:
 Optional:
 - `CLICKUP_CF_SHIPMENT_STATUS` if you want a custom field that stores carrier status text.
 - `CLICKUP_CF_STATUS_LAST_CHECKED` if you want a dedicated custom field for last checked timestamp.
+- `CLICKUP_CF_TRACK_TRACE_SNAPSHOT` if you want updates/comments only when carrier data changes.
 
 If you prefer using native ClickUp Task Status:
 - Set `CLICKUP_USE_TASK_STATUS=true`
@@ -86,6 +87,11 @@ Live sync:
 ```bash
 shipment-sync
 ```
+
+To avoid posting duplicate comments on unchanged shipments:
+- create a plain text ClickUp custom field
+- set `CLICKUP_CF_TRACK_TRACE_SNAPSHOT` to that field ID
+- optionally set `SHIPMENT_COMMENT_ON_NO_CHANGE=true` if you want a small "No change" comment instead of silence
 
 ## API
 Start the local API server:

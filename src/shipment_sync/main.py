@@ -42,7 +42,10 @@ def main() -> None:
         stats = run_sync(client)
         updated_items = stats.updated_items
         skipped = stats.skipped
-        print(f"Sync complete. Candidates: {stats.total_candidates}, Updated: {len(updated_items)}, skipped: {skipped}")
+        print(
+            f"Sync complete. Candidates: {stats.total_candidates}, Updated: {len(updated_items)}, "
+            f"Unchanged: {stats.unchanged}, skipped: {skipped}"
+        )
 
         if stats.candidates_by_list:
             print("Candidates by list:")
@@ -52,6 +55,11 @@ def main() -> None:
         if stats.updated_by_list:
             print("Updated by list:")
             for label, count in sorted(stats.updated_by_list.items()):
+                print(f"- {label}: {count}")
+
+        if stats.unchanged_by_list:
+            print("Unchanged by list:")
+            for label, count in sorted(stats.unchanged_by_list.items()):
                 print(f"- {label}: {count}")
 
         if updated_items:

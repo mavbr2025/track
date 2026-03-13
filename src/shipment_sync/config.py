@@ -21,6 +21,7 @@ class Settings:
     cf_shipping_line: str
     cf_shipment_status: str | None
     cf_status_last_checked: str | None
+    cf_track_trace_snapshot: str | None
     clickup_include_closed: bool = False
     clickup_include_archived: bool = False
     clickup_use_task_status: bool = False
@@ -34,6 +35,7 @@ class Settings:
     shipment_preflight_enabled: bool = True
     shipment_preflight_timeout_seconds: int = 8
     shipment_min_sync_interval_hours: int = 0
+    shipment_comment_on_no_change: bool = False
 
     @property
     def clickup_auth_header_value(self) -> str:
@@ -87,6 +89,7 @@ class Settings:
             cf_shipping_line=_must("CLICKUP_CF_SHIPPING_LINE"),
             cf_shipment_status=_optional("CLICKUP_CF_SHIPMENT_STATUS"),
             cf_status_last_checked=_optional("CLICKUP_CF_STATUS_LAST_CHECKED"),
+            cf_track_trace_snapshot=_optional("CLICKUP_CF_TRACK_TRACE_SNAPSHOT"),
             clickup_include_closed=_bool("CLICKUP_INCLUDE_CLOSED", default=False),
             clickup_include_archived=_bool("CLICKUP_INCLUDE_ARCHIVED", default=False),
             clickup_use_task_status=_bool("CLICKUP_USE_TASK_STATUS", default=False),
@@ -100,6 +103,7 @@ class Settings:
             shipment_preflight_enabled=_bool("SHIPMENT_PREFLIGHT_ENABLED", default=True),
             shipment_preflight_timeout_seconds=_int("SHIPMENT_PREFLIGHT_TIMEOUT_SECONDS", default=8, min_value=1),
             shipment_min_sync_interval_hours=_int("SHIPMENT_MIN_SYNC_INTERVAL_HOURS", default=0, min_value=0),
+            shipment_comment_on_no_change=_bool("SHIPMENT_COMMENT_ON_NO_CHANGE", default=False),
         )
 
 

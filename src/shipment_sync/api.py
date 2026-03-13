@@ -68,9 +68,11 @@ class UpdatedShipmentResponse(BaseModel):
 class SyncResponse(BaseModel):
     total_candidates: int
     updated: int
+    unchanged: int
     skipped: int
     candidates_by_list: dict[str, int]
     updated_by_list: dict[str, int]
+    unchanged_by_list: dict[str, int]
     updated_items: list[UpdatedShipmentResponse]
 
 
@@ -398,9 +400,11 @@ def _serialize_sync_stats(stats: SyncStats) -> SyncResponse:
     return SyncResponse(
         total_candidates=stats.total_candidates,
         updated=len(stats.updated_items),
+        unchanged=stats.unchanged,
         skipped=stats.skipped,
         candidates_by_list=stats.candidates_by_list,
         updated_by_list=stats.updated_by_list,
+        unchanged_by_list=stats.unchanged_by_list,
         updated_items=[_serialize_updated_shipment(item) for item in stats.updated_items],
     )
 

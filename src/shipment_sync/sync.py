@@ -35,10 +35,12 @@ class UpdatedShipment:
 @dataclass
 class SyncStats:
     updated_items: list[UpdatedShipment]
+    unchanged: int
     skipped: int
     total_candidates: int
     candidates_by_list: dict[str, int] = field(default_factory=dict)
     updated_by_list: dict[str, int] = field(default_factory=dict)
+    unchanged_by_list: dict[str, int] = field(default_factory=dict)
 
 
 def run_sync(client: ClickUpClient) -> SyncStats:
@@ -46,9 +48,11 @@ def run_sync(client: ClickUpClient) -> SyncStats:
     all_shipments = client.list_shipments()
 
     updated_items: list[UpdatedShipment] = []
+    unchanged = 0
     skipped = 0
     candidates_by_list: dict[str, int] = {}
     updated_by_list: dict[str, int] = {}
+    unchanged_by_list: dict[str, int] = {}
     prefiltered_excluded_counts: dict[str, int] = {}
     prefiltered_not_allowed_counts: dict[str, int] = {}
     prefiltered_recent_counts: dict[str, int] = {}
@@ -129,28 +133,32 @@ def run_sync(client: ClickUpClient) -> SyncStats:
 
         try:
             status = adapter.fetch_status(shipment)
-            client.update_shipment_status(shipment, status)
-            updated_items.append(
-                UpdatedShipment(
-                    task_id=shipment.task_id,
-                    task_name=shipment.task_name,
-                    shipping_line=shipment.shipping_line,
-                    booking_no=shipment.booking_no,
-                    container_no=shipment.container_no,
-                    status_text=status.status_text,
-                    location=status.location,
-                    event_time=status.event_time,
-                    eta_time=status.eta_time,
-                    eta_local_text=status.eta_local_text,
-                    latest_move_name=status.latest_move.name if status.latest_move else None,
-                    latest_move_location=status.latest_move.location if status.latest_move else None,
-                    latest_move_time_local_text=status.latest_move.event_time_local_text if status.latest_move else None,
-                    movement_details=status.movement_details,
-                    list_id=shipment.list_id,
-                    list_name=shipment.list_name,
+            write_result = client.update_shipment_status(shipment, status)
+            if write_result.changed:
+                updated_items.append(
+                    UpdatedShipment(
+                        task_id=shipment.task_id,
+                        task_name=shipment.task_name,
+                        shipping_line=shipment.shipping_line,
+                        booking_no=shipment.booking_no,
+                        container_no=shipment.container_no,
+                        status_text=status.status_text,
+                        location=status.location,
+                        event_time=status.event_time,
+                        eta_time=status.eta_time,
+                        eta_local_text=status.eta_local_text,
+                        latest_move_name=status.latest_move.name if status.latest_move else None,
+                        latest_move_location=status.latest_move.location if status.latest_move else None,
+                        latest_move_time_local_text=status.latest_move.event_time_local_text if status.latest_move else None,
+                        movement_details=status.movement_details,
+                        list_id=shipment.list_id,
+                        list_name=shipment.list_name,
+                    )
                 )
-            )
-            updated_by_list[list_label] = updated_by_list.get(list_label, 0) + 1
+                updated_by_list[list_label] = updated_by_list.get(list_label, 0) + 1
+            else:
+                unchanged += 1
+                unchanged_by_list[list_label] = unchanged_by_list.get(list_label, 0) + 1
         except Exception as exc:
             message = str(exc)
             if "adapter not configured" in message.lower():
@@ -194,10 +202,12 @@ def run_sync(client: ClickUpClient) -> SyncStats:
 
     return SyncStats(
         updated_items=updated_items,
+        unchanged=unchanged,
         skipped=skipped,
         total_candidates=total_candidates,
         candidates_by_list=candidates_by_list,
         updated_by_list=updated_by_list,
+        unchanged_by_list=unchanged_by_list,
     )
 
 

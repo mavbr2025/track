@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 import re
 import sys
@@ -9,7 +11,7 @@ import requests
 
 from .config import Settings
 from .date_utils import format_display_date
-from .models import MovementEvent, ShipmentRef, ShipmentStatus
+from .models import MovementEvent, ShipmentRef, ShipmentStatus, ShipmentWriteResult
 
 
 class ClickUpClient:
@@ -59,9 +61,19 @@ class ClickUpClient:
             shipping_line = _field_text(fields.get(self.settings.cf_shipping_line))
             booking_no = _field_text(fields.get(self.settings.cf_booking_no))
             container_no = _field_text(fields.get(self.settings.cf_container_no))
+            current_status_value = (
+                _field_text(fields.get(self.settings.cf_shipment_status))
+                if self.settings.cf_shipment_status
+                else None
+            )
             last_checked_at = (
                 _parse_last_checked(fields.get(self.settings.cf_status_last_checked))
                 if self.settings.cf_status_last_checked
+                else None
+            )
+            track_trace_snapshot_hash = (
+                _field_text(fields.get(self.settings.cf_track_trace_snapshot))
+                if self.settings.cf_track_trace_snapshot
                 else None
             )
 
@@ -87,6 +99,8 @@ class ClickUpClient:
                     list_id=list_id,
                     list_name=list_name,
                     last_checked_at=last_checked_at,
+                    current_status_value=current_status_value,
+                    track_trace_snapshot_hash=track_trace_snapshot_hash,
                 )
             )
         print(f"ClickUp candidate shipment tasks: {len(shipments)}", file=sys.stderr)
@@ -209,13 +223,44 @@ class ClickUpClient:
             page += 1
         return all_tasks
 
-    def update_shipment_status(self, shipment: ShipmentRef, status: ShipmentStatus) -> None:
+    def update_shipment_status(self, shipment: ShipmentRef, status: ShipmentStatus) -> ShipmentWriteResult:
         now_utc = datetime.now(timezone.utc)
         last_checked = now_utc.isoformat()
         last_checked_display = now_utc.date().isoformat()
         eta_text = _format_event_time(status.eta_local_text, status.eta_time)
         status_value = f"ETA {eta_text}" if self.settings.eta_only_mode else status.status_text
         source_link = status.source_url or _extract_first_url(status.raw_source)
+        snapshot_hash = _compute_snapshot_hash(
+            shipment=shipment,
+            status=status,
+            status_value=status_value,
+            eta_text=eta_text,
+        )
+
+        previous_snapshot_hash = (shipment.track_trace_snapshot_hash or "").strip() or None
+        previous_status_value = (shipment.current_status_value or "").strip() or None
+        changed = True
+        if previous_snapshot_hash and previous_snapshot_hash == snapshot_hash:
+            changed = False
+        elif not previous_snapshot_hash and previous_status_value and previous_status_value == status_value:
+            changed = False
+
+        if not changed:
+            if self.settings.cf_status_last_checked:
+                self._set_custom_field(shipment.task_id, self.settings.cf_status_last_checked, last_checked)
+            if self.settings.cf_track_trace_snapshot and previous_snapshot_hash != snapshot_hash:
+                self._set_custom_field(shipment.task_id, self.settings.cf_track_trace_snapshot, snapshot_hash)
+            if self.settings.shipment_comment_on_no_change:
+                comment_lines = [
+                    f"{self.settings.status_comment_prefix}: No change",
+                    f"Line: {shipment.shipping_line}",
+                    f"Status remains: {status_value}",
+                    f"Last checked (UTC): {last_checked_display}",
+                ]
+                if source_link:
+                    comment_lines.append(f"Carrier source: {source_link}")
+                self._post_comment(shipment.task_id, "\n".join(comment_lines))
+            return ShipmentWriteResult(changed=False, status_value=status_value, snapshot_hash=snapshot_hash)
 
         if self.settings.cf_shipment_status:
             self._set_custom_field(shipment.task_id, self.settings.cf_shipment_status, status_value)
@@ -231,6 +276,8 @@ class ClickUpClient:
 
         if self.settings.cf_status_last_checked:
             self._set_custom_field(shipment.task_id, self.settings.cf_status_last_checked, last_checked)
+        if self.settings.cf_track_trace_snapshot:
+            self._set_custom_field(shipment.task_id, self.settings.cf_track_trace_snapshot, snapshot_hash)
 
         if self.settings.recent_moves_limit > 0:
             recent_moves = status.recent_moves[: self.settings.recent_moves_limit]
@@ -282,6 +329,7 @@ class ClickUpClient:
                 comment_lines.append(f"Source trace: {status.raw_source}")
 
         self._post_comment(shipment.task_id, "\n".join(comment_lines))
+        return ShipmentWriteResult(changed=True, status_value=status_value, snapshot_hash=snapshot_hash)
 
     def _set_custom_field(self, task_id: str, field_id: str, value: str) -> None:
         url = f"{self.base_url}/task/{task_id}/field/{field_id}"
@@ -484,3 +532,30 @@ def _extract_first_url(value: str | None) -> str | None:
     if not match:
         return None
     return match.group(0).rstrip(".,;)")
+
+
+def _compute_snapshot_hash(
+    *,
+    shipment: ShipmentRef,
+    status: ShipmentStatus,
+    status_value: str,
+    eta_text: str,
+) -> str:
+    latest_move = status.latest_move
+    snapshot = {
+        "line": shipment.shipping_line,
+        "status_value": status_value,
+        "status_text": status.status_text or "",
+        "eta_text": eta_text,
+        "location": status.location or "",
+        "event_time": status.event_time.isoformat() if status.event_time else "",
+        "movement_details": status.movement_details or "",
+        "latest_move_name": latest_move.name if latest_move else "",
+        "latest_move_location": latest_move.location if latest_move else "",
+        "latest_move_time": _format_event_time(
+            latest_move.event_time_local_text if latest_move else None,
+            latest_move.event_time if latest_move else None,
+        ),
+    }
+    raw = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
