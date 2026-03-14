@@ -71,6 +71,12 @@ class Settings:
                 "or CLICKUP_API_TOKEN."
             )
 
+        cf_shipment_status = _optional("CLICKUP_CF_SHIPMENT_STATUS")
+        cf_status_last_checked = _optional("CLICKUP_CF_STATUS_LAST_CHECKED")
+        cf_track_trace_snapshot = _optional("CLICKUP_CF_TRACK_TRACE_SNAPSHOT")
+        if cf_track_trace_snapshot and cf_status_last_checked and cf_track_trace_snapshot == cf_status_last_checked:
+            cf_track_trace_snapshot = None
+
         return cls(
             clickup_api_token=clickup_api_token,
             clickup_oauth_access_token=clickup_oauth_access_token,
@@ -87,9 +93,9 @@ class Settings:
             cf_container_no=_must("CLICKUP_CF_CONTAINER_NO"),
             cf_booking_no=_must("CLICKUP_CF_BOOKING_NO"),
             cf_shipping_line=_must("CLICKUP_CF_SHIPPING_LINE"),
-            cf_shipment_status=_optional("CLICKUP_CF_SHIPMENT_STATUS"),
-            cf_status_last_checked=_optional("CLICKUP_CF_STATUS_LAST_CHECKED"),
-            cf_track_trace_snapshot=_optional("CLICKUP_CF_TRACK_TRACE_SNAPSHOT"),
+            cf_shipment_status=cf_shipment_status,
+            cf_status_last_checked=cf_status_last_checked,
+            cf_track_trace_snapshot=cf_track_trace_snapshot,
             clickup_include_closed=_bool("CLICKUP_INCLUDE_CLOSED", default=False),
             clickup_include_archived=_bool("CLICKUP_INCLUDE_ARCHIVED", default=False),
             clickup_use_task_status=_bool("CLICKUP_USE_TASK_STATUS", default=False),
