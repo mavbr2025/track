@@ -225,7 +225,6 @@ class ClickUpClient:
 
     def update_shipment_status(self, shipment: ShipmentRef, status: ShipmentStatus) -> ShipmentWriteResult:
         now_utc = datetime.now(timezone.utc)
-        last_checked = now_utc.isoformat()
         last_checked_display = now_utc.date().isoformat()
         eta_text = _format_event_time(status.eta_local_text, status.eta_time)
         status_value = f"ETA {eta_text}" if self.settings.eta_only_mode else status.status_text
@@ -247,7 +246,7 @@ class ClickUpClient:
 
         if not changed:
             if self.settings.cf_status_last_checked:
-                self._set_custom_field(shipment.task_id, self.settings.cf_status_last_checked, last_checked)
+                self._set_date_custom_field(shipment.task_id, self.settings.cf_status_last_checked, now_utc)
             if self.settings.cf_track_trace_snapshot and previous_snapshot_hash != snapshot_hash:
                 self._set_custom_field(shipment.task_id, self.settings.cf_track_trace_snapshot, snapshot_hash)
             if self.settings.shipment_comment_on_no_change:
@@ -275,7 +274,7 @@ class ClickUpClient:
                 )
 
         if self.settings.cf_status_last_checked:
-            self._set_custom_field(shipment.task_id, self.settings.cf_status_last_checked, last_checked)
+            self._set_date_custom_field(shipment.task_id, self.settings.cf_status_last_checked, now_utc)
         if self.settings.cf_track_trace_snapshot:
             self._set_custom_field(shipment.task_id, self.settings.cf_track_trace_snapshot, snapshot_hash)
 
@@ -334,6 +333,18 @@ class ClickUpClient:
     def _set_custom_field(self, task_id: str, field_id: str, value: str) -> None:
         url = f"{self.base_url}/task/{task_id}/field/{field_id}"
         response = self.session.post(url, json={"value": value}, timeout=30)
+        response.raise_for_status()
+
+    def _set_date_custom_field(self, task_id: str, field_id: str, value: datetime) -> None:
+        url = f"{self.base_url}/task/{task_id}/field/{field_id}"
+        response = self.session.post(
+            url,
+            json={
+                "value": int(value.timestamp() * 1000),
+                "value_options": {"time": True},
+            },
+            timeout=30,
+        )
         response.raise_for_status()
 
     def _set_task_status(self, task_id: str, status_name: str) -> None:
