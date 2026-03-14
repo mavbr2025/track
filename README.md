@@ -13,6 +13,9 @@ This project reads shipment references from ClickUp tasks, checks carrier tracki
 
 Compatibility links are kept at the root for `build/`, `output/`, and `website/` so older commands still resolve.
 
+Release history:
+- [`WHATS_NEW.md`](/Users/mario/Documents/New project/WHATS_NEW.md)
+
 ## What it does
 - Reads tasks from a ClickUp list
 - Extracts shipping line + booking/container custom fields
@@ -665,7 +668,7 @@ For CMA-CGM:
     - If CMA API env is configured, preflight checks the API host (not the public web tracking page).
   - When blocked, the adapter fails with a clear message and preflight can skip the line upfront.
 
-For MSC, PIL, Evergreen, Wan Hai, and OOCL (generic adapters):
+For PIL, Evergreen, and OOCL (generic adapters):
 - Each line supports either API URL or website template mode.
 - Use the corresponding env prefix (`MSC_`, `PIL_`, `EVERGREEN_`, `WAN_HAI_`, `OOCL_`):
   - `{PREFIX}_TRACKING_API_URL` or `{PREFIX}_TRACKING_URL_TEMPLATE`
@@ -673,6 +676,20 @@ For MSC, PIL, Evergreen, Wan Hai, and OOCL (generic adapters):
   - optional query keys: `{PREFIX}_REF_PARAM`, `{PREFIX}_TYPE_PARAM`
   - reference type codes: `{PREFIX}_BOOKING_TYPE_CODE`, `{PREFIX}_CONTAINER_TYPE_CODE`
 - If both URL settings are empty, adapter uses a default public tracking page URL for that carrier.
+
+For Wan Hai:
+- Dedicated browser mode is recommended:
+  - `WAN_HAI_USE_PLAYWRIGHT=true`
+  - `WAN_HAI_PLAYWRIGHT_HEADLESS=false`
+  - `WAN_HAI_PLAYWRIGHT_BROWSER=chromium`
+  - `WAN_HAI_PLAYWRIGHT_CHANNEL=chrome`
+  - `WAN_HAI_PLAYWRIGHT_TRACKING_URL=https://vip.wanhai.com/views/cargo_track_v2/tracking_query.xhtml`
+- Current implementation uses the Wan Hai query form, opens the result popup, and reads:
+  - latest container/booking status
+  - vessel and voyage
+  - loading/discharge ports when booking detail is available
+  - estimated arrival date when booking detail is available
+- Generic fallback env vars remain available, but Wan Hai's public site is commonly blocked by anti-bot protection in direct HTTP mode.
 
 For Hapag-Lloyd:
 - Website/API template mode:

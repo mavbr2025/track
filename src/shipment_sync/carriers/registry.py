@@ -7,6 +7,7 @@ from shipment_sync.carriers.hapag_lloyd import HapagLloydAdapter
 from shipment_sync.carriers.maersk import MaerskAdapter
 from shipment_sync.carriers.msc import MscAdapter
 from shipment_sync.carriers.one import OneAdapter
+from shipment_sync.carriers.wan_hai import WanHaiAdapter
 
 
 def build_carrier_registry() -> dict[str, CarrierAdapter]:
@@ -35,12 +36,7 @@ def build_carrier_registry() -> dict[str, CarrierAdapter]:
         default_page_url_template="https://www.evergreen-line.com/",
         challenge_markers=("captcha", "access denied", "forbidden", "please enable javascript"),
     )
-    wan_hai = GenericLineAdapter(
-        env_prefix="WAN_HAI",
-        line_label="Wan Hai",
-        default_page_url_template="https://www.wanhai.com/views/cargoTrack/CargoTrack.xhtml",
-        challenge_markers=("captcha", "access denied", "forbidden", "please enable javascript"),
-    )
+    wan_hai = WanHaiAdapter()
     oocl = GenericLineAdapter(
         env_prefix="OOCL",
         line_label="OOCL",
