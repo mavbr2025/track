@@ -21,7 +21,7 @@ class WanHaiAdapter(CarrierAdapter):
         self.eta_only_mode = _env_bool("SHIPMENT_ETA_ONLY", default=True)
         self.use_playwright = _env_bool("WAN_HAI_USE_PLAYWRIGHT", default=True)
         self.playwright_required = _env_bool("WAN_HAI_PLAYWRIGHT_REQUIRED", default=False)
-        self.playwright_headless = _env_bool("WAN_HAI_PLAYWRIGHT_HEADLESS", default=False)
+        self.playwright_headless = _env_bool("WAN_HAI_PLAYWRIGHT_HEADLESS", default=True)
         self.playwright_timeout_seconds = int(os.getenv("WAN_HAI_PLAYWRIGHT_TIMEOUT_SECONDS", "90"))
         self.playwright_request_delay_seconds = float(os.getenv("WAN_HAI_PLAYWRIGHT_REQUEST_DELAY_SECONDS", "8"))
         self.playwright_browser = os.getenv("WAN_HAI_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"

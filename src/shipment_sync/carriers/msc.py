@@ -23,6 +23,8 @@ class MscAdapter(CarrierAdapter):
         self.playwright_browser = os.getenv("MSC_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
         self.playwright_channel = os.getenv("MSC_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
         self.playwright_locale = os.getenv("MSC_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
+        self.playwright_challenge_timeout_seconds = int(os.getenv("MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS", "20"))
+        self.playwright_challenge_reload_attempts = int(os.getenv("MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS", "1"))
         self.playwright_user_agent = (
             os.getenv(
                 "MSC_PLAYWRIGHT_USER_AGENT",
@@ -121,7 +123,10 @@ class MscAdapter(CarrierAdapter):
             if browser_type is None:
                 raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
 
-            launch_kwargs: dict[str, Any] = {"headless": self.playwright_headless}
+            launch_kwargs: dict[str, Any] = {
+                "headless": self.playwright_headless,
+                "args": ["--disable-blink-features=AutomationControlled"],
+            }
             if self.playwright_channel and self.playwright_browser == "chromium":
                 launch_kwargs["channel"] = self.playwright_channel
 
@@ -130,9 +135,23 @@ class MscAdapter(CarrierAdapter):
                 context = browser.new_context(
                     user_agent=self.playwright_user_agent,
                     locale=self.playwright_locale,
+                    viewport={"width": 1440, "height": 900},
                 )
+                context.set_extra_http_headers(
+                    {
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    }
+                )
+                context.add_init_script(_STEALTH_INIT_SCRIPT)
                 page = context.new_page()
                 page.goto(self.tracking_page_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                _wait_for_msc_page_ready(
+                    page,
+                    timeout_ms=timeout_ms,
+                    challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
+                    reload_attempts=self.playwright_challenge_reload_attempts,
+                )
                 page.wait_for_selector(
                     "input[name='__RequestVerificationToken']",
                     timeout=timeout_ms,
@@ -150,27 +169,53 @@ class MscAdapter(CarrierAdapter):
                 if self.playwright_request_delay_seconds > 0:
                     page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
 
-                response = context.request.post(
-                    self.tracking_api_url,
-                    form={
-                        "__RequestVerificationToken": token,
+                response_payload = page.evaluate(
+                    """
+                    async ({ url, token, trackingMode, reference }) => {
+                        const body = new URLSearchParams({
+                            "__RequestVerificationToken": token,
+                            "trackingMode": trackingMode,
+                            "trackingNumber": reference,
+                        });
+                        const response = await fetch(url, {
+                            method: "POST",
+                            credentials: "same-origin",
+                            headers: {
+                                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                                "X-Requested-With": "XMLHttpRequest",
+                                "Accept": "application/json, text/plain, */*",
+                            },
+                            body,
+                        });
+                        const text = await response.text();
+                        return {
+                            status: response.status,
+                            text,
+                            url: response.url,
+                        };
+                    }
+                    """,
+                    {
+                        "url": self.tracking_api_url,
+                        "token": token,
                         "trackingMode": tracking_mode,
-                        "trackingNumber": reference,
+                        "reference": reference,
                     },
-                    headers={
-                        "Origin": "https://www.msc.com",
-                        "Referer": self.tracking_page_url,
-                        "X-Requested-With": "XMLHttpRequest",
-                    },
-                    timeout=timeout_ms,
                 )
-                if response.status >= 400:
-                    snippet = response.text().strip().replace("\n", " ")[:240]
-                    raise ValueError(f"MSC TrackingInfo failed HTTP {response.status}: {snippet}")
-                payload = response.json()
+                response_status = int(response_payload.get("status", 0))
+                response_text = str(response_payload.get("text", ""))
+                response_url = str(response_payload.get("url", self.tracking_api_url))
+                if response_status >= 400:
+                    snippet = response_text.strip().replace("\n", " ")[:240]
+                    raise ValueError(f"MSC TrackingInfo failed HTTP {response_status}: {snippet}")
+                try:
+                    payload = page.evaluate("payload => JSON.parse(payload)", response_text)
+                except Exception as exc:
+                    snippet = response_text.strip().replace("\n", " ")[:240]
+                    raise ValueError(f"MSC TrackingInfo returned non-JSON payload: {snippet}") from exc
                 if not isinstance(payload, dict):
                     raise ValueError("MSC TrackingInfo returned non-object JSON payload")
-                return payload, f"msc-playwright:{self.tracking_api_url}"
+                return payload, f"msc-playwright:{response_url}"
             finally:
                 browser.close()
 
@@ -384,3 +429,45 @@ def _extract_unsuccessful_payload_message(payload: dict[str, Any]) -> str | None
         cleaned = data.strip()
         return cleaned or None
     return None
+
+
+def _wait_for_msc_page_ready(page: Any, *, timeout_ms: int, challenge_timeout_seconds: int, reload_attempts: int) -> None:
+    deadline = time.monotonic() + max(1, challenge_timeout_seconds)
+    reloads_used = 0
+    while True:
+        try:
+            page.wait_for_selector(
+                "input[name='__RequestVerificationToken']",
+                timeout=min(timeout_ms, 3000),
+                state="attached",
+            )
+            html = page.content().lower()
+            if "access denied" not in html and "just a moment" not in html and "security check" not in html:
+                return
+        except Exception:
+            pass
+
+        html = page.content().lower()
+        if "access denied" not in html and "just a moment" not in html and "security check" not in html:
+            return
+        if time.monotonic() >= deadline:
+            if reloads_used < max(0, reload_attempts):
+                page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+                reloads_used += 1
+                deadline = time.monotonic() + max(1, challenge_timeout_seconds)
+                continue
+            if "access denied" in html:
+                raise ValueError("MSC page access denied in browser session")
+            raise ValueError("MSC page challenge did not clear in browser session")
+        page.wait_for_timeout(1000)
+
+
+_STEALTH_INIT_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+Object.defineProperty(navigator, 'vendor', {get: () => 'Google Inc.'});
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4]});
+window.chrome = window.chrome || { runtime: {} };
+"""

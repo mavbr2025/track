@@ -31,6 +31,8 @@ class HapagLloydAdapter(CarrierAdapter):
         self.playwright_browser = os.getenv("HAPAG_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
         self.playwright_channel = os.getenv("HAPAG_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
         self.playwright_locale = os.getenv("HAPAG_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
+        self.playwright_challenge_timeout_seconds = int(os.getenv("HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS", "20"))
+        self.playwright_challenge_reload_attempts = int(os.getenv("HAPAG_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS", "1"))
         self.playwright_user_agent = (
             os.getenv(
                 "HAPAG_PLAYWRIGHT_USER_AGENT",
@@ -220,18 +222,24 @@ class HapagLloydAdapter(CarrierAdapter):
                     locale=self.playwright_locale,
                     viewport={"width": 1440, "height": 900},
                 )
+                context.set_extra_http_headers(
+                    {
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    }
+                )
                 context.add_init_script(
-                    """
-                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                    Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
-                    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-                    window.chrome = window.chrome || { runtime: {} };
-                    """
+                    _STEALTH_INIT_SCRIPT
                 )
                 page = context.new_page()
                 page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                if self.playwright_request_delay_seconds > 0:
-                    page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
+                _wait_for_hapag_result_page(
+                    page,
+                    timeout_ms=timeout_ms,
+                    challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
+                    reload_attempts=self.playwright_challenge_reload_attempts,
+                    post_load_delay_seconds=self.playwright_request_delay_seconds,
+                )
 
                 html = page.content()
                 return _status_from_page(
@@ -593,6 +601,54 @@ def _value_at(values: list[str], idx: int | None) -> str | None:
 
 def _clean_page_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _wait_for_hapag_result_page(
+    page: Any,
+    *,
+    timeout_ms: int,
+    challenge_timeout_seconds: int,
+    reload_attempts: int,
+    post_load_delay_seconds: float,
+) -> None:
+    deadline = time.monotonic() + max(1, challenge_timeout_seconds)
+    reloads_used = 0
+    while True:
+        html = page.content()
+        lowered = html.lower()
+        if _hapag_result_view_ready(lowered):
+            if post_load_delay_seconds > 0:
+                page.wait_for_timeout(int(post_load_delay_seconds * 1000))
+            return
+        if time.monotonic() >= deadline:
+            if _hapag_security_page(lowered) and reloads_used < max(0, reload_attempts):
+                page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+                reloads_used += 1
+                deadline = time.monotonic() + max(1, challenge_timeout_seconds)
+                continue
+            if _hapag_security_page(lowered):
+                raise ValueError("Hapag page blocked by security check")
+            raise ValueError("Hapag tracking page did not render the expected result view")
+        page.wait_for_timeout(1000)
+
+
+def _hapag_result_view_ready(html: str) -> bool:
+    return "tracing by booking" in html or "tracing by container" in html
+
+
+def _hapag_security_page(html: str) -> bool:
+    return "security check" in html or "just a moment" in html
+
+
+_STEALTH_INIT_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+Object.defineProperty(navigator, 'vendor', {get: () => 'Google Inc.'});
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4]});
+window.chrome = window.chrome || { runtime: {} };
+"""
 
 
 def _extract_moves(payload: dict[str, Any]) -> list[MovementEvent]:

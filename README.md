@@ -594,6 +594,8 @@ For Maersk official Events API mode (recommended):
 For MSC anti-bot resistant mode (recommended):
 - `MSC_USE_PLAYWRIGHT=true`
 - `MSC_PLAYWRIGHT_CHANNEL=chrome`
+- `MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=20`
+- `MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS=1`
 - `MSC_PLAYWRIGHT_TRACKING_URL=https://www.msc.com/en/track-a-shipment`
 - `MSC_PLAYWRIGHT_API_ENDPOINT=https://www.msc.com/api/feature/tools/TrackingInfo`
 - Optional hard requirement: `MSC_PLAYWRIGHT_REQUIRED=true` (fail run if browser mode fails)
@@ -680,7 +682,7 @@ For PIL, Evergreen, and OOCL (generic adapters):
 For Wan Hai:
 - Dedicated browser mode is recommended:
   - `WAN_HAI_USE_PLAYWRIGHT=true`
-  - `WAN_HAI_PLAYWRIGHT_HEADLESS=false`
+  - `WAN_HAI_PLAYWRIGHT_HEADLESS=true` for Render/server deployments
   - `WAN_HAI_PLAYWRIGHT_BROWSER=chromium`
   - `WAN_HAI_PLAYWRIGHT_CHANNEL=chrome`
   - `WAN_HAI_PLAYWRIGHT_TRACKING_URL=https://vip.wanhai.com/views/cargo_track_v2/tracking_query.xhtml`
@@ -703,6 +705,8 @@ For Hapag-Lloyd:
     - `HAPAG_PLAYWRIGHT_HEADLESS`
     - `HAPAG_PLAYWRIGHT_BROWSER`
     - `HAPAG_PLAYWRIGHT_CHANNEL`
+    - `HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS`
+    - `HAPAG_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS`
     - `HAPAG_PLAYWRIGHT_TIMEOUT_SECONDS`
     - `HAPAG_PLAYWRIGHT_REQUEST_DELAY_SECONDS`
     - `HAPAG_PLAYWRIGHT_VIEW`

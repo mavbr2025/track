@@ -67,6 +67,8 @@ MSC day-one requirement:
 - use `MSC_PLAYWRIGHT_BROWSER=chromium`
 - keep `MSC_PLAYWRIGHT_CHANNEL=chrome`
 - keep `MSC_PLAYWRIGHT_HEADLESS=true`
+- start with `MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=20`
+- start with `MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS=1`
 
 Hapag-Lloyd browser mode:
 - keep `HAPAG_USE_PLAYWRIGHT=true`
@@ -75,6 +77,15 @@ Hapag-Lloyd browser mode:
 - keep `HAPAG_PLAYWRIGHT_CHANNEL=chrome`
 - keep `HAPAG_PLAYWRIGHT_HEADLESS=true`
 - keep `HAPAG_PLAYWRIGHT_VIEW=S8510`
+- start with `HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=20`
+- start with `HAPAG_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS=1`
+
+Wan Hai browser mode:
+- keep `WAN_HAI_USE_PLAYWRIGHT=true`
+- keep `WAN_HAI_PLAYWRIGHT_REQUIRED=false`
+- use `WAN_HAI_PLAYWRIGHT_BROWSER=chromium`
+- keep `WAN_HAI_PLAYWRIGHT_CHANNEL=chrome`
+- keep `WAN_HAI_PLAYWRIGHT_HEADLESS=true`
 
 Important:
 - Copy the same shipment-sync env vars to `track-trace-cron`

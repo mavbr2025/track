@@ -57,6 +57,8 @@ MSC day-one settings:
 - `MSC_PLAYWRIGHT_BROWSER=chromium`
 - `MSC_PLAYWRIGHT_CHANNEL=chrome`
 - `MSC_PLAYWRIGHT_HEADLESS=true`
+- `MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=20`
+- `MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS=1`
 - `MSC_PLAYWRIGHT_TRACKING_URL=https://www.msc.com/en/track-a-shipment`
 - `MSC_PLAYWRIGHT_API_ENDPOINT=https://www.msc.com/api/feature/tools/TrackingInfo`
 
@@ -67,6 +69,15 @@ Hapag-Lloyd browser settings:
 - `HAPAG_PLAYWRIGHT_CHANNEL=chrome`
 - `HAPAG_PLAYWRIGHT_HEADLESS=true`
 - `HAPAG_PLAYWRIGHT_VIEW=S8510`
+- `HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=20`
+- `HAPAG_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS=1`
+
+Wan Hai browser settings:
+- `WAN_HAI_USE_PLAYWRIGHT=true`
+- `WAN_HAI_PLAYWRIGHT_REQUIRED=false`
+- `WAN_HAI_PLAYWRIGHT_BROWSER=chromium`
+- `WAN_HAI_PLAYWRIGHT_CHANNEL=chrome`
+- `WAN_HAI_PLAYWRIGHT_HEADLESS=true`
 
 Other carrier settings:
 - copy only the carrier env vars you actually use in production

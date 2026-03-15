@@ -42,6 +42,16 @@ services:
         value: "true"
       - key: HAPAG_PLAYWRIGHT_VIEW
         value: "S8510"
+      - key: WAN_HAI_USE_PLAYWRIGHT
+        value: "true"
+      - key: WAN_HAI_PLAYWRIGHT_REQUIRED
+        value: "false"
+      - key: WAN_HAI_PLAYWRIGHT_BROWSER
+        value: "chromium"
+      - key: WAN_HAI_PLAYWRIGHT_CHANNEL
+        value: "chrome"
+      - key: WAN_HAI_PLAYWRIGHT_HEADLESS
+        value: "true"
 
   - type: cron
     name: track-trace-cron
@@ -82,3 +92,13 @@ services:
         value: "true"
       - key: HAPAG_PLAYWRIGHT_VIEW
         value: "S8510"
+      - key: WAN_HAI_USE_PLAYWRIGHT
+        value: "true"
+      - key: WAN_HAI_PLAYWRIGHT_REQUIRED
+        value: "false"
+      - key: WAN_HAI_PLAYWRIGHT_BROWSER
+        value: "chromium"
+      - key: WAN_HAI_PLAYWRIGHT_CHANNEL
+        value: "chrome"
+      - key: WAN_HAI_PLAYWRIGHT_HEADLESS
+        value: "true"
