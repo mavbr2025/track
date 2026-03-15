@@ -65,8 +65,16 @@ MSC day-one requirement:
 - keep `MSC_USE_PLAYWRIGHT=true`
 - keep `MSC_PLAYWRIGHT_REQUIRED=true`
 - use `MSC_PLAYWRIGHT_BROWSER=chromium`
-- keep `MSC_PLAYWRIGHT_CHANNEL=` blank on Render so Playwright uses the bundled Chromium binary
+- keep `MSC_PLAYWRIGHT_CHANNEL=chrome`
 - keep `MSC_PLAYWRIGHT_HEADLESS=true`
+
+Hapag-Lloyd browser mode:
+- keep `HAPAG_USE_PLAYWRIGHT=true`
+- keep `HAPAG_PLAYWRIGHT_REQUIRED=false`
+- use `HAPAG_PLAYWRIGHT_BROWSER=chromium`
+- keep `HAPAG_PLAYWRIGHT_CHANNEL=chrome`
+- keep `HAPAG_PLAYWRIGHT_HEADLESS=true`
+- keep `HAPAG_PLAYWRIGHT_VIEW=S8510`
 
 Important:
 - Copy the same shipment-sync env vars to `track-trace-cron`
@@ -158,6 +166,7 @@ Recommended:
 - monitor that cron is still running every 2 hours
 - watch ClickUp for stale shipments that were not updated
 - review MSC-specific failures separately because browser-driven failures tend to differ from normal API failures
+- review Hapag browser-mode failures separately because Hapag may intermittently present a security-check page
 
 ## Maintenance
 

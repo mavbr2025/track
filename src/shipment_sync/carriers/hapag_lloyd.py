@@ -1,10 +1,12 @@
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
 import requests
+from bs4 import BeautifulSoup
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
@@ -21,6 +23,44 @@ from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 class HapagLloydAdapter(CarrierAdapter):
     def __init__(self) -> None:
         self.eta_only_mode = _env_bool("SHIPMENT_ETA_ONLY", default=True)
+        self.use_playwright = _env_bool("HAPAG_USE_PLAYWRIGHT", default=True)
+        self.playwright_required = _env_bool("HAPAG_PLAYWRIGHT_REQUIRED", default=False)
+        self.playwright_headless = _env_bool("HAPAG_PLAYWRIGHT_HEADLESS", default=True)
+        self.playwright_timeout_seconds = int(os.getenv("HAPAG_PLAYWRIGHT_TIMEOUT_SECONDS", "90"))
+        self.playwright_request_delay_seconds = float(os.getenv("HAPAG_PLAYWRIGHT_REQUEST_DELAY_SECONDS", "6"))
+        self.playwright_browser = os.getenv("HAPAG_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
+        self.playwright_channel = os.getenv("HAPAG_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
+        self.playwright_locale = os.getenv("HAPAG_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
+        self.playwright_user_agent = (
+            os.getenv(
+                "HAPAG_PLAYWRIGHT_USER_AGENT",
+                (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+            ).strip()
+            or (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            )
+        )
+        self.playwright_view = os.getenv("HAPAG_PLAYWRIGHT_VIEW", "S8510").strip() or "S8510"
+        self.playwright_container_url_template = os.getenv(
+            "HAPAG_PLAYWRIGHT_CONTAINER_URL_TEMPLATE",
+            (
+                "https://www.hapag-lloyd.com/en/online-business/track/"
+                "track-by-container-solution.html?view={view}&container={reference}"
+            ),
+        ).strip()
+        self.playwright_booking_url_template = os.getenv(
+            "HAPAG_PLAYWRIGHT_BOOKING_URL_TEMPLATE",
+            (
+                "https://www.hapag-lloyd.com/en/online-business/track/"
+                "track-by-booking-solution.html?view={view}&booking={reference}"
+            ),
+        ).strip()
         self.url_template = os.getenv("HAPAG_TRACKING_URL_TEMPLATE", "").strip()
         self.api_url = os.getenv("HAPAG_TRACKING_API_URL", "https://api.hlag.com/hlag/external/v2/events/").strip()
         self.api_key = os.getenv("HAPAG_API_KEY", "").strip()
@@ -53,6 +93,44 @@ class HapagLloydAdapter(CarrierAdapter):
         self._oauth_expires_at: datetime | None = None
 
     def fetch_status(self, shipment: ShipmentRef) -> ShipmentStatus:
+        playwright_error: Exception | None = None
+        if self.use_playwright:
+            try:
+                return self._fetch_status_playwright(shipment)
+            except Exception as exc:
+                playwright_error = exc
+                if self.playwright_required:
+                    raise
+
+        try:
+            return self._fetch_status_api(shipment)
+        except Exception as fallback_error:
+            if playwright_error is not None:
+                raise ValueError(f"Hapag page mode failed ({playwright_error}); fallback failed ({fallback_error})")
+            raise
+
+    def _fetch_status_playwright(self, shipment: ShipmentRef) -> ShipmentStatus:
+        attempts = _build_reference_attempts(shipment, self.booking_type_code, self.container_type_code)
+        if not attempts:
+            raise ValueError("Missing booking/container number")
+
+        last_error: Exception | None = None
+        for reference, ref_type_code in attempts:
+            for attempt in range(self.max_retries + 1):
+                try:
+                    return self._playwright_request(reference=reference, ref_type_code=ref_type_code)
+                except Exception as exc:
+                    last_error = exc
+                    if attempt >= self.max_retries:
+                        break
+                    time.sleep(self.retry_delay_seconds * (attempt + 1))
+
+        if last_error is not None:
+            raise last_error
+        raise ValueError("Hapag page mode failed without a specific error")
+
+    def _fetch_status_api(self, shipment: ShipmentRef) -> ShipmentStatus:
+        self._validate_configuration()
         reference, ref_type_code = _pick_reference(shipment, self.booking_type_code, self.container_type_code)
         reference = _normalize_reference(reference)
         source_url = _build_source_url(self.page_url_template, reference, ref_type_code)
@@ -114,6 +192,69 @@ class HapagLloydAdapter(CarrierAdapter):
             movement_details=movement_details,
         )
 
+    def _playwright_request(self, *, reference: str, ref_type_code: str) -> ShipmentStatus:
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:
+            raise ValueError("Playwright is not installed. Run: pip install -e .[browser]") from exc
+
+        timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
+        target_url = self._build_playwright_url(reference=reference, ref_type_code=ref_type_code)
+
+        with sync_playwright() as p:
+            browser_type = getattr(p, self.playwright_browser, None)
+            if browser_type is None:
+                raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
+
+            launch_kwargs: dict[str, Any] = {
+                "headless": self.playwright_headless,
+                "args": ["--disable-blink-features=AutomationControlled"],
+            }
+            if self.playwright_channel and self.playwright_browser == "chromium":
+                launch_kwargs["channel"] = self.playwright_channel
+
+            browser = browser_type.launch(**launch_kwargs)
+            try:
+                context = browser.new_context(
+                    user_agent=self.playwright_user_agent,
+                    locale=self.playwright_locale,
+                    viewport={"width": 1440, "height": 900},
+                )
+                context.add_init_script(
+                    """
+                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                    Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
+                    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                    window.chrome = window.chrome || { runtime: {} };
+                    """
+                )
+                page = context.new_page()
+                page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                if self.playwright_request_delay_seconds > 0:
+                    page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
+
+                html = page.content()
+                return _status_from_page(
+                    html=html,
+                    source_url=page.url,
+                    eta_only_mode=self.eta_only_mode,
+                )
+            finally:
+                browser.close()
+
+    def _validate_configuration(self) -> None:
+        if self.url_template:
+            return
+        if not self.api_url:
+            raise ValueError("adapter not configured: set HAPAG_TRACKING_URL_TEMPLATE or HAPAG_TRACKING_API_URL")
+        if self._has_api_auth():
+            return
+        raise ValueError(
+            "adapter not configured: Hapag API requires auth; set "
+            "HAPAG_BEARER_TOKEN, HAPAG_OAUTH_TOKEN_URL + HAPAG_OAUTH_CLIENT_ID + "
+            "HAPAG_OAUTH_CLIENT_SECRET, HAPAG_API_KEY, or HAPAG_CLIENT_ID + HAPAG_CLIENT_SECRET"
+        )
+
     def _fetch_payload(self, reference: str, ref_type_code: str) -> tuple[dict[str, Any], str]:
         headers = self._base_headers()
         params = self._build_params(reference, ref_type_code)
@@ -146,6 +287,27 @@ class HapagLloydAdapter(CarrierAdapter):
         )
         payload = extract_json_from_http_response(response)
         return payload, f"hapag-api:{self.api_url}"
+
+    def _has_api_auth(self) -> bool:
+        if self.bearer_token:
+            return True
+        if self.api_key:
+            return True
+        if self.client_id and self.client_secret:
+            return True
+        if self.oauth_token_url and self.oauth_client_id and self.oauth_client_secret:
+            return True
+        return False
+
+    def _build_playwright_url(self, *, reference: str, ref_type_code: str) -> str:
+        template = self.playwright_booking_url_template
+        if ref_type_code.strip().lower() in {"container", "equipment", "cntr", "c"}:
+            template = self.playwright_container_url_template
+        return template.format(
+            reference=quote(reference),
+            type=quote(ref_type_code),
+            view=quote(self.playwright_view),
+        )
 
     def _build_params(self, reference: str, ref_type_code: str) -> dict[str, str]:
         code = ref_type_code.strip().lower()
@@ -244,6 +406,19 @@ def _pick_reference(shipment: ShipmentRef, booking_code: str, container_code: st
     raise ValueError("Missing booking/container number")
 
 
+def _build_reference_attempts(shipment: ShipmentRef, booking_code: str, container_code: str) -> list[tuple[str, str]]:
+    attempts: list[tuple[str, str]] = []
+    if shipment.container_no:
+        ref = _normalize_reference(shipment.container_no)
+        if ref:
+            attempts.append((ref, container_code))
+    if shipment.booking_no:
+        ref = _normalize_reference(shipment.booking_no)
+        if ref:
+            attempts.append((ref, booking_code))
+    return attempts
+
+
 def _normalize_reference(reference: str) -> str:
     cleaned = reference.strip()
     if not cleaned:
@@ -255,6 +430,169 @@ def _normalize_reference(reference: str) -> str:
         if re.match(r"^[A-Za-z]{4}\d{7}$", token):
             return token
     return tokens[0]
+
+
+def _status_from_page(*, html: str, source_url: str, eta_only_mode: bool) -> ShipmentStatus:
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text("\n", strip=True)
+    normalized_text = text.lower()
+    if "security check" in normalized_text or "just a moment" in normalized_text:
+        raise ValueError("Hapag page blocked by security check")
+    if "tracing by booking" not in normalized_text and "tracing by container" not in normalized_text:
+        raise ValueError("Hapag tracking page did not render the expected result view")
+
+    recent_moves = _extract_page_moves(soup)
+    latest_move = recent_moves[-1] if recent_moves else None
+    eta_time, eta_local_text = _derive_eta_from_page_moves(recent_moves)
+    last_movement = _extract_page_last_movement(text)
+
+    status_text = (latest_move.name if latest_move else None) or last_movement or _eta_status_text(eta_time)
+    location = latest_move.location if latest_move else None
+    event_time = latest_move.event_time if latest_move else None
+    movement_details = _extract_page_transport_details(soup, latest_move)
+
+    if eta_only_mode:
+        return ShipmentStatus(
+            status_text=_eta_status_text(eta_time),
+            eta_time=eta_time,
+            eta_local_text=eta_local_text,
+            latest_move=latest_move,
+            recent_moves=recent_moves,
+            raw_source=f"hapag-playwright:{source_url}",
+            source_url=source_url,
+        )
+
+    return ShipmentStatus(
+        status_text=status_text,
+        location=location,
+        event_time=event_time,
+        eta_time=eta_time,
+        eta_local_text=eta_local_text,
+        latest_move=latest_move,
+        recent_moves=recent_moves,
+        raw_source=f"hapag-playwright:{source_url}",
+        source_url=source_url,
+        movement_details=movement_details,
+    )
+
+
+def _extract_page_moves(soup: BeautifulSoup) -> list[MovementEvent]:
+    for table in soup.find_all("table"):
+        headers = [_clean_page_text(th.get_text(" ", strip=True)) for th in table.find_all("th")]
+        normalized = [header.lower() for header in headers]
+        if not normalized:
+            continue
+        if "status" not in normalized:
+            continue
+        if not any("date" in header for header in normalized):
+            continue
+
+        status_idx = _header_index(normalized, "status")
+        location_idx = _header_index(normalized, "place")
+        if location_idx is None:
+            location_idx = _header_index(normalized, "activity")
+        date_idx = _header_index(normalized, "date")
+        time_idx = _header_index(normalized, "time")
+        transport_idx = _header_index(normalized, "transport")
+        voyage_idx = _header_index(normalized, "voyage")
+
+        moves: list[MovementEvent] = []
+        for row in table.find_all("tr"):
+            cells = row.find_all("td")
+            if not cells:
+                continue
+            values = [_clean_page_text(cell.get_text(" ", strip=True)) for cell in cells]
+            status = _value_at(values, status_idx)
+            if not status:
+                continue
+            date_text = _value_at(values, date_idx)
+            time_text = _value_at(values, time_idx)
+            event_time_local_text = " ".join(part for part in (date_text, time_text) if part).strip() or date_text
+            detail_parts = [part for part in (_value_at(values, transport_idx), _value_at(values, voyage_idx)) if part]
+            fallback_name = status
+            if detail_parts:
+                fallback_name = f"{status} ({' | '.join(detail_parts)})"
+
+            moves.append(
+                MovementEvent(
+                    name=to_dcsa_movement_name(
+                        event={"eventDescription": status},
+                        fallback_name=fallback_name,
+                    ),
+                    location=_value_at(values, location_idx),
+                    event_time=parse_event_time(event_time_local_text),
+                    event_time_local_text=event_time_local_text or None,
+                    event_state="actual" if row.find(["strong", "b"]) else "estimated",
+                )
+            )
+        if moves:
+            return moves
+    return []
+
+
+def _extract_page_last_movement(text: str) -> str | None:
+    for line in [part.strip() for part in text.splitlines() if part.strip()]:
+        if line.lower().startswith("the vessel "):
+            return line
+    return None
+
+
+def _derive_eta_from_page_moves(moves: list[MovementEvent]) -> tuple[datetime | None, str | None]:
+    arrival_candidates: list[MovementEvent] = []
+    for move in moves:
+        if move.event_time is None:
+            continue
+        if "arriv" in move.name.lower():
+            arrival_candidates.append(move)
+    if arrival_candidates:
+        last_arrival = arrival_candidates[-1]
+        return last_arrival.event_time, last_arrival.event_time_local_text
+    for move in reversed(moves):
+        if move.event_time is not None:
+            return move.event_time, move.event_time_local_text
+    return None, None
+
+
+def _extract_page_transport_details(soup: BeautifulSoup, latest_move: MovementEvent | None) -> str | None:
+    if latest_move is None:
+        return None
+    for table in soup.find_all("table"):
+        headers = [_clean_page_text(th.get_text(" ", strip=True)).lower() for th in table.find_all("th")]
+        if "status" not in headers or not any("transport" in header for header in headers):
+            continue
+        rows = table.find_all("tr")
+        if not rows:
+            continue
+        last_cells = rows[-1].find_all("td")
+        if not last_cells:
+            continue
+        values = [_clean_page_text(cell.get_text(" ", strip=True)) for cell in last_cells]
+        transport = _value_at(values, _header_index(headers, "transport"))
+        voyage = _value_at(values, _header_index(headers, "voyage"))
+        parts = [part for part in (transport, voyage) if part]
+        if parts:
+            return " | ".join(parts)
+    return None
+
+
+def _header_index(headers: list[str], fragment: str) -> int | None:
+    for idx, header in enumerate(headers):
+        if fragment in header:
+            return idx
+    return None
+
+
+def _value_at(values: list[str], idx: int | None) -> str | None:
+    if idx is None:
+        return None
+    if idx < 0 or idx >= len(values):
+        return None
+    value = values[idx].strip()
+    return value or None
+
+
+def _clean_page_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
 
 
 def _extract_moves(payload: dict[str, Any]) -> list[MovementEvent]:

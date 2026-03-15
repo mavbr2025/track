@@ -285,16 +285,39 @@ def _preflight_hosts_for_line(line_name: str) -> list[str]:
         return hosts
 
     if normalized in {"hapag lloyd", "hapag-lloyd", "hapag lloyd ag"}:
+        hapag_use_playwright = _env_bool("HAPAG_USE_PLAYWRIGHT", True)
         hapag_api_url = os.getenv("HAPAG_TRACKING_API_URL", "").strip()
         hapag_template = os.getenv("HAPAG_TRACKING_URL_TEMPLATE", "").strip()
         hapag_page = os.getenv(
             "HAPAG_TRACKING_PAGE_URL_TEMPLATE",
             "https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html",
         ).strip()
+        hapag_api_key = os.getenv("HAPAG_API_KEY", "").strip()
+        hapag_client_id = os.getenv("HAPAG_CLIENT_ID", "").strip()
+        hapag_client_secret = os.getenv("HAPAG_CLIENT_SECRET", "").strip()
         bearer_token = os.getenv("HAPAG_BEARER_TOKEN", "").strip()
         oauth_token_url = os.getenv("HAPAG_OAUTH_TOKEN_URL", "").strip()
+        oauth_client_id = os.getenv("HAPAG_OAUTH_CLIENT_ID", "").strip()
+        oauth_client_secret = os.getenv("HAPAG_OAUTH_CLIENT_SECRET", "").strip()
+        hapag_has_auth = bool(
+            bearer_token
+            or hapag_api_key
+            or (hapag_client_id and hapag_client_secret)
+            or (oauth_token_url and oauth_client_id and oauth_client_secret)
+        )
+
+        if hapag_use_playwright:
+            _append_host(hosts, hapag_page)
+            return hosts
 
         if hapag_api_url:
+            if not hapag_template and not hapag_has_auth:
+                failures[normalized] = (
+                    "Hapag API requires auth; set HAPAG_BEARER_TOKEN, "
+                    "HAPAG_OAUTH_TOKEN_URL + HAPAG_OAUTH_CLIENT_ID + HAPAG_OAUTH_CLIENT_SECRET, "
+                    "HAPAG_API_KEY, or HAPAG_CLIENT_ID + HAPAG_CLIENT_SECRET"
+                )
+                return failures
             _append_host(hosts, hapag_api_url)
             if not bearer_token and oauth_token_url:
                 _append_host(hosts, oauth_token_url)

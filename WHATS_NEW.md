@@ -9,6 +9,28 @@ This file tracks the notable changes shipped in each build so we have a simple r
 
 ## Build History
 
+### 2026-03-15 - Unreleased
+Title: Add Hapag-Lloyd browser tracking mode for Render
+
+What changed:
+- Added a Playwright-driven Hapag-Lloyd tracking path that opens the public tracking page and parses rendered tracking tables.
+- Hapag now tries browser mode first and falls back to the protected API path only when needed.
+- Added Render defaults for Hapag browser mode on both `shipment-api` and `track-trace-cron`.
+- Updated Render docs to keep MSC on the Chrome channel and to document the new Hapag browser settings.
+
+Why it mattered:
+- Hapag API requests were failing with `401 Unauthorized` when API credentials were not configured.
+- The new browser path gives us a production-ready alternative closer to the working MSC model.
+- Render deployment defaults now match the browser setup that current carrier adapters expect.
+
+Files:
+- `render.yaml`
+- `README.md`
+- `docs/PRODUCTION_TRACK_TRACE.md`
+- `docs/RENDER_LAUNCH_CHECKLIST.md`
+- `src/shipment_sync/carriers/hapag_lloyd.py`
+- `src/shipment_sync/sync.py`
+
 ### 2026-03-14 - Unreleased
 Title: Add dedicated Wan Hai Track&Trace adapter
 

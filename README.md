@@ -692,10 +692,26 @@ For Wan Hai:
 - Generic fallback env vars remain available, but Wan Hai's public site is commonly blocked by anti-bot protection in direct HTTP mode.
 
 For Hapag-Lloyd:
+- Browser/page mode:
+  - `HAPAG_USE_PLAYWRIGHT=true`
+  - Opens the public Hapag tracking page in Chrome/Playwright and parses the rendered tracking tables.
+  - Default container page template:
+    - `HAPAG_PLAYWRIGHT_CONTAINER_URL_TEMPLATE=https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html?view={view}&container={reference}`
+  - Default booking page template:
+    - `HAPAG_PLAYWRIGHT_BOOKING_URL_TEMPLATE=https://www.hapag-lloyd.com/en/online-business/track/track-by-booking-solution.html?view={view}&booking={reference}`
+  - Tuning:
+    - `HAPAG_PLAYWRIGHT_HEADLESS`
+    - `HAPAG_PLAYWRIGHT_BROWSER`
+    - `HAPAG_PLAYWRIGHT_CHANNEL`
+    - `HAPAG_PLAYWRIGHT_TIMEOUT_SECONDS`
+    - `HAPAG_PLAYWRIGHT_REQUEST_DELAY_SECONDS`
+    - `HAPAG_PLAYWRIGHT_VIEW`
+    - `HAPAG_PLAYWRIGHT_USER_AGENT`
 - Website/API template mode:
   - `HAPAG_TRACKING_URL_TEMPLATE=...` (supports `{reference}` and optional `{type}`)
 - API mode:
   - `HAPAG_TRACKING_API_URL=https://api.hlag.com/hlag/external/v2/events/`
+  - The Hapag API is protected; if you use `HAPAG_TRACKING_API_URL`, configure at least one auth mode below.
   - One of these auth setups:
     - `HAPAG_API_KEY`, `HAPAG_API_KEY_HEADER` (if required)
     - or gateway client headers: `HAPAG_CLIENT_ID`, `HAPAG_CLIENT_SECRET` (headers configurable)

@@ -27,9 +27,21 @@ services:
       - key: MSC_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: MSC_PLAYWRIGHT_CHANNEL
-        value: ""
+        value: "chrome"
       - key: MSC_PLAYWRIGHT_HEADLESS
         value: "true"
+      - key: HAPAG_USE_PLAYWRIGHT
+        value: "true"
+      - key: HAPAG_PLAYWRIGHT_REQUIRED
+        value: "false"
+      - key: HAPAG_PLAYWRIGHT_BROWSER
+        value: "chromium"
+      - key: HAPAG_PLAYWRIGHT_CHANNEL
+        value: "chrome"
+      - key: HAPAG_PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: HAPAG_PLAYWRIGHT_VIEW
+        value: "S8510"
 
   - type: cron
     name: track-trace-cron
@@ -55,6 +67,18 @@ services:
       - key: MSC_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: MSC_PLAYWRIGHT_CHANNEL
-        value: ""
+        value: "chrome"
       - key: MSC_PLAYWRIGHT_HEADLESS
         value: "true"
+      - key: HAPAG_USE_PLAYWRIGHT
+        value: "true"
+      - key: HAPAG_PLAYWRIGHT_REQUIRED
+        value: "false"
+      - key: HAPAG_PLAYWRIGHT_BROWSER
+        value: "chromium"
+      - key: HAPAG_PLAYWRIGHT_CHANNEL
+        value: "chrome"
+      - key: HAPAG_PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: HAPAG_PLAYWRIGHT_VIEW
+        value: "S8510"
