@@ -263,7 +263,11 @@ def _status_from_parsed(
     latest_move_name = _normalize_status_text(latest_status_text)
     latest_move_time_local = result.get("event_time_local_text") or detail.get("estimated_departure_date")
     latest_move_time = parse_event_time(latest_move_time_local)
-    latest_move_location = result.get("location") or detail.get("port_of_loading") or detail.get("place_of_receipt")
+    latest_move_location = _normalize_location_text(
+        result.get("location"),
+        detail=detail,
+        status_text=latest_status_text,
+    )
     eta_local_text = _parse_wan_hai_date(detail.get("estimated_arrival_date"))
     eta_time = parse_event_time(eta_local_text)
 
@@ -312,9 +316,41 @@ def _render_route(detail: dict[str, str]) -> str | None:
     return origin or destination
 
 
+def _normalize_location_text(
+    value: str | None,
+    *,
+    detail: dict[str, str],
+    status_text: str | None,
+) -> str | None:
+    if not value:
+        return detail.get("port_of_loading") or detail.get("place_of_receipt")
+
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    if not cleaned:
+        return detail.get("port_of_loading") or detail.get("place_of_receipt")
+
+    translated = _WAN_HAI_LOCATION_TRANSLATIONS.get(cleaned)
+    if translated:
+        return translated
+
+    if _contains_cjk(cleaned):
+        port_loading = detail.get("port_of_loading")
+        port_discharging = detail.get("port_of_discharging")
+        normalized_status = (status_text or "").strip().upper()
+        if "DISC" in normalized_status or "DISCHARG" in normalized_status or "卸船" in cleaned:
+            return port_discharging or port_loading or cleaned
+        return port_loading or detail.get("place_of_receipt") or cleaned
+
+    return cleaned
+
+
 def _clean_cell_text(cell: Any) -> str:
     text = cell.get_text(" ", strip=True) if cell is not None else ""
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
 
 
 def _parse_wan_hai_datetime(value: str | None) -> str | None:
@@ -381,3 +417,15 @@ def _env_bool(name: str, *, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+_WAN_HAI_LOCATION_TRANSLATIONS = {
+    "青島前灣及裝箱碼頭有限責任公司": "Qingdao Qianwan Container Terminal Co., Ltd.",
+    "青島前灣聯合集裝箱碼頭有限責任公司": "Qingdao Qianwan United Container Terminal Co., Ltd.",
+    "上海明東集裝箱碼頭有限公司": "Shanghai Mingdong Container Terminals Ltd.",
+    "寧波北侖第三集裝箱碼頭有限公司": "Ningbo Beilun Third Container Terminal Co., Ltd.",
+    "寧波大榭招商國際碼頭有限公司": "Ningbo Daxie China Merchants International Terminal Co., Ltd.",
+    "蛇口集裝箱碼頭有限公司": "Shekou Container Terminals Ltd.",
+    "鹽田國際集裝箱碼頭": "Yantian International Container Terminals",
+    "廈門遠海集裝箱碼頭有限公司": "Xiamen Ocean Gate Container Terminal Co., Ltd.",
+}
