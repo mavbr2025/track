@@ -25,12 +25,15 @@ What changed:
 - Added `beautifulsoup4` as a project dependency for HTML parsing.
 - Normalized known Wan Hai terminal/location names into English before writing them back to ClickUp.
 - Added a fallback so CJK-only event locations can fall back to the English routing ports from booking details.
+- Fixed MSC browser defaults so a blank `MSC_PLAYWRIGHT_CHANNEL` now falls back to `chrome` instead of silently downgrading to bundled Chromium.
+- Updated the Docker image to install the Playwright `chrome` channel during build so MSC can use the browser profile that passes MSC's anti-bot checks.
 
 Why it mattered:
 - Wan Hai was previously recognized by name but not actually integrated reliably.
 - The old generic JSON/web mode was being blocked by anti-bot responses and returning HTML instead of usable tracking data.
 - The new adapter was validated locally against a real shipment and returned live status successfully.
 - ClickUp comments and shipment updates no longer show Chinese-only location text for validated Wan Hai events.
+- MSC production builds are now aligned with the Chrome channel that was confirmed to expose the tracking token while bundled Chromium was being denied.
 
 Files:
 - `.env.example`

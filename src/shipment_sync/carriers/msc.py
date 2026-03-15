@@ -21,7 +21,7 @@ class MscAdapter(CarrierAdapter):
         self.playwright_timeout_seconds = int(os.getenv("MSC_PLAYWRIGHT_TIMEOUT_SECONDS", "90"))
         self.playwright_request_delay_seconds = float(os.getenv("MSC_PLAYWRIGHT_REQUEST_DELAY_SECONDS", "0.5"))
         self.playwright_browser = os.getenv("MSC_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
-        self.playwright_channel = os.getenv("MSC_PLAYWRIGHT_CHANNEL", "chrome").strip()
+        self.playwright_channel = os.getenv("MSC_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
         self.playwright_locale = os.getenv("MSC_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
         self.playwright_user_agent = (
             os.getenv(
