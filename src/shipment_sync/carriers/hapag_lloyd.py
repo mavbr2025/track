@@ -28,11 +28,13 @@ class HapagLloydAdapter(CarrierAdapter):
         self.playwright_headless = _env_bool("HAPAG_PLAYWRIGHT_HEADLESS", default=True)
         self.playwright_timeout_seconds = int(os.getenv("HAPAG_PLAYWRIGHT_TIMEOUT_SECONDS", "90"))
         self.playwright_request_delay_seconds = float(os.getenv("HAPAG_PLAYWRIGHT_REQUEST_DELAY_SECONDS", "6"))
+        self.playwright_warmup_seconds = float(os.getenv("HAPAG_PLAYWRIGHT_WARMUP_SECONDS", "4"))
         self.playwright_browser = os.getenv("HAPAG_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
         self.playwright_channel = os.getenv("HAPAG_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
         self.playwright_locale = os.getenv("HAPAG_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
         self.playwright_challenge_timeout_seconds = int(os.getenv("HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS", "20"))
         self.playwright_challenge_reload_attempts = int(os.getenv("HAPAG_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS", "1"))
+        self.playwright_session_reuse = _env_bool("HAPAG_PLAYWRIGHT_SESSION_REUSE", default=True)
         self.playwright_user_agent = (
             os.getenv(
                 "HAPAG_PLAYWRIGHT_USER_AGENT",
@@ -93,6 +95,11 @@ class HapagLloydAdapter(CarrierAdapter):
         self.session = requests.Session()
         self._oauth_access_token: str | None = None
         self._oauth_expires_at: datetime | None = None
+        self._playwright_runtime: Any | None = None
+        self._playwright_browser_handle: Any | None = None
+        self._playwright_context: Any | None = None
+        self._playwright_page: Any | None = None
+        self._playwright_warmed_mode: str | None = None
 
     def fetch_status(self, shipment: ShipmentRef) -> ShipmentStatus:
         playwright_error: Exception | None = None
@@ -201,54 +208,39 @@ class HapagLloydAdapter(CarrierAdapter):
             raise ValueError("Playwright is not installed. Run: pip install -e .[browser]") from exc
 
         timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
+        normalized_mode = ref_type_code.strip().lower()
+        landing_url = self._build_playwright_landing_url(ref_type_code=normalized_mode)
         target_url = self._build_playwright_url(reference=reference, ref_type_code=ref_type_code)
+        try:
+            page = self._get_or_create_playwright_page(sync_playwright)
+            self._warm_playwright_session(
+                page,
+                landing_url=landing_url,
+                mode=normalized_mode,
+                timeout_ms=timeout_ms,
+            )
+            page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            _wait_for_hapag_result_page(
+                page,
+                timeout_ms=timeout_ms,
+                challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
+                reload_attempts=self.playwright_challenge_reload_attempts,
+                post_load_delay_seconds=self.playwright_request_delay_seconds,
+            )
 
-        with sync_playwright() as p:
-            browser_type = getattr(p, self.playwright_browser, None)
-            if browser_type is None:
-                raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
-
-            launch_kwargs: dict[str, Any] = {
-                "headless": self.playwright_headless,
-                "args": ["--disable-blink-features=AutomationControlled"],
-            }
-            if self.playwright_channel and self.playwright_browser == "chromium":
-                launch_kwargs["channel"] = self.playwright_channel
-
-            browser = browser_type.launch(**launch_kwargs)
-            try:
-                context = browser.new_context(
-                    user_agent=self.playwright_user_agent,
-                    locale=self.playwright_locale,
-                    viewport={"width": 1440, "height": 900},
-                )
-                context.set_extra_http_headers(
-                    {
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                        "Accept-Language": "en-US,en;q=0.9",
-                    }
-                )
-                context.add_init_script(
-                    _STEALTH_INIT_SCRIPT
-                )
-                page = context.new_page()
-                page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                _wait_for_hapag_result_page(
-                    page,
-                    timeout_ms=timeout_ms,
-                    challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
-                    reload_attempts=self.playwright_challenge_reload_attempts,
-                    post_load_delay_seconds=self.playwright_request_delay_seconds,
-                )
-
-                html = page.content()
-                return _status_from_page(
-                    html=html,
-                    source_url=page.url,
-                    eta_only_mode=self.eta_only_mode,
-                )
-            finally:
-                browser.close()
+            html = page.content()
+            return _status_from_page(
+                html=html,
+                source_url=page.url,
+                eta_only_mode=self.eta_only_mode,
+            )
+        except Exception as exc:
+            if _should_reset_playwright_session(exc):
+                self._reset_playwright_session()
+            raise
+        finally:
+            if not self.playwright_session_reuse:
+                self._reset_playwright_session()
 
     def _validate_configuration(self) -> None:
         if self.url_template:
@@ -316,6 +308,105 @@ class HapagLloydAdapter(CarrierAdapter):
             type=quote(ref_type_code),
             view=quote(self.playwright_view),
         )
+
+    def _build_playwright_landing_url(self, *, ref_type_code: str) -> str:
+        template = self.playwright_booking_url_template
+        reference = ""
+        if ref_type_code in {"container", "equipment", "cntr", "c"}:
+            template = self.playwright_container_url_template
+        return template.format(
+            reference=quote(reference),
+            type=quote(ref_type_code),
+            view=quote(self.playwright_view),
+        )
+
+    def _get_or_create_playwright_page(self, sync_playwright: Any) -> Any:
+        if self._playwright_page is not None:
+            return self._playwright_page
+
+        runtime = sync_playwright().start()
+        browser_type = getattr(runtime, self.playwright_browser, None)
+        if browser_type is None:
+            runtime.stop()
+            raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
+
+        launch_kwargs: dict[str, Any] = {
+            "headless": self.playwright_headless,
+            "args": ["--disable-blink-features=AutomationControlled"],
+        }
+        if self.playwright_channel and self.playwright_browser == "chromium":
+            launch_kwargs["channel"] = self.playwright_channel
+
+        browser = browser_type.launch(**launch_kwargs)
+        context = browser.new_context(
+            user_agent=self.playwright_user_agent,
+            locale=self.playwright_locale,
+            viewport={"width": 1440, "height": 900},
+        )
+        context.set_extra_http_headers(
+            {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+        )
+        context.add_init_script(_STEALTH_INIT_SCRIPT)
+        page = context.new_page()
+
+        self._playwright_runtime = runtime
+        self._playwright_browser_handle = browser
+        self._playwright_context = context
+        self._playwright_page = page
+        self._playwright_warmed_mode = None
+        return page
+
+    def _warm_playwright_session(self, page: Any, *, landing_url: str, mode: str, timeout_ms: int) -> None:
+        if self.playwright_session_reuse and self._playwright_warmed_mode == mode:
+            return
+
+        page.goto(landing_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        self._perform_human_warmup(page)
+        _wait_for_hapag_challenge_stage(
+            page,
+            timeout_ms=timeout_ms,
+            challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
+            reload_attempts=self.playwright_challenge_reload_attempts,
+        )
+        self._playwright_warmed_mode = mode
+
+    def _perform_human_warmup(self, page: Any) -> None:
+        page.mouse.move(220, 180)
+        page.wait_for_timeout(500)
+        page.mouse.move(480, 260)
+        page.mouse.wheel(0, 500)
+        page.wait_for_timeout(500)
+        page.mouse.wheel(0, -200)
+        if self.playwright_warmup_seconds > 0:
+            page.wait_for_timeout(int(self.playwright_warmup_seconds * 1000))
+
+    def _reset_playwright_session(self) -> None:
+        page = self._playwright_page
+        context = self._playwright_context
+        browser = self._playwright_browser_handle
+        runtime = self._playwright_runtime
+
+        self._playwright_page = None
+        self._playwright_context = None
+        self._playwright_browser_handle = None
+        self._playwright_runtime = None
+        self._playwright_warmed_mode = None
+
+        for resource in (page, context, browser):
+            if resource is None:
+                continue
+            try:
+                resource.close()
+            except Exception:
+                pass
+        if runtime is not None:
+            try:
+                runtime.stop()
+            except Exception:
+                pass
 
     def _build_params(self, reference: str, ref_type_code: str) -> dict[str, str]:
         code = ref_type_code.strip().lower()
@@ -623,6 +714,7 @@ def _wait_for_hapag_result_page(
         if time.monotonic() >= deadline:
             if _hapag_security_page(lowered) and reloads_used < max(0, reload_attempts):
                 page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+                _perform_hapag_interaction(page)
                 reloads_used += 1
                 deadline = time.monotonic() + max(1, challenge_timeout_seconds)
                 continue
@@ -638,6 +730,55 @@ def _hapag_result_view_ready(html: str) -> bool:
 
 def _hapag_security_page(html: str) -> bool:
     return "security check" in html or "just a moment" in html
+
+
+def _wait_for_hapag_challenge_stage(
+    page: Any,
+    *,
+    timeout_ms: int,
+    challenge_timeout_seconds: int,
+    reload_attempts: int,
+) -> None:
+    deadline = time.monotonic() + max(1, challenge_timeout_seconds)
+    reloads_used = 0
+    while True:
+        html = page.content().lower()
+        if not _hapag_security_page(html):
+            return
+        if time.monotonic() >= deadline:
+            if reloads_used < max(0, reload_attempts):
+                page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+                _perform_hapag_interaction(page)
+                reloads_used += 1
+                deadline = time.monotonic() + max(1, challenge_timeout_seconds)
+                continue
+            # Keep the warmed session and let the target navigation try with whatever cookies we gained.
+            return
+        page.wait_for_timeout(1000)
+
+
+def _perform_hapag_interaction(page: Any) -> None:
+    try:
+        page.mouse.move(220, 180)
+        page.wait_for_timeout(250)
+        page.mouse.move(480, 260)
+        page.mouse.wheel(0, 400)
+        page.wait_for_timeout(250)
+        page.mouse.wheel(0, -150)
+    except Exception:
+        return
+
+
+def _should_reset_playwright_session(exc: Exception) -> bool:
+    message = str(exc).lower()
+    reset_markers = (
+        "target page, context or browser has been closed",
+        "browser has been closed",
+        "context closed",
+        "connection closed",
+        "crash",
+    )
+    return any(marker in message for marker in reset_markers)
 
 
 _STEALTH_INIT_SCRIPT = """

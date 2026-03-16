@@ -42,6 +42,12 @@ services:
         value: "true"
       - key: HAPAG_PLAYWRIGHT_VIEW
         value: "S8510"
+      - key: HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS
+        value: "45"
+      - key: HAPAG_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS
+        value: "2"
+      - key: HAPAG_PLAYWRIGHT_WARMUP_SECONDS
+        value: "6"
       - key: WAN_HAI_USE_PLAYWRIGHT
         value: "true"
       - key: WAN_HAI_PLAYWRIGHT_REQUIRED
@@ -92,6 +98,12 @@ services:
         value: "true"
       - key: HAPAG_PLAYWRIGHT_VIEW
         value: "S8510"
+      - key: HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS
+        value: "45"
+      - key: HAPAG_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS
+        value: "2"
+      - key: HAPAG_PLAYWRIGHT_WARMUP_SECONDS
+        value: "6"
       - key: WAN_HAI_USE_PLAYWRIGHT
         value: "true"
       - key: WAN_HAI_PLAYWRIGHT_REQUIRED
