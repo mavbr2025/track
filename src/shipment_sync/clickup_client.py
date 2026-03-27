@@ -10,7 +10,7 @@ from typing import Any
 import requests
 
 from .config import Settings
-from .date_utils import format_display_date
+from .date_utils import format_display_date, format_port_local_time
 from .models import (
     MovementEvent,
     ShipmentFieldWrite,
@@ -238,6 +238,7 @@ class ClickUpClient:
         now_utc = datetime.now(timezone.utc)
         last_checked_display = now_utc.isoformat(timespec="seconds")
         eta_text = _format_event_time(status.eta_local_text, status.eta_time)
+        eta_port_local_text = _format_port_local_time(status.eta_local_text, status.eta_time)
         status_value = f"ETA {eta_text}" if self.settings.eta_only_mode else status.status_text
         source_link = status.source_url or _extract_first_url(status.raw_source)
         snapshot_hash = _compute_snapshot_hash(
@@ -245,6 +246,7 @@ class ClickUpClient:
             status=status,
             status_value=status_value,
             eta_text=eta_text,
+            eta_port_local_text=eta_port_local_text,
         )
 
         previous_snapshot_hash = (shipment.track_trace_snapshot_hash or "").strip() or None
@@ -304,7 +306,7 @@ class ClickUpClient:
         if self.settings.eta_only_mode:
             comment_lines = [
                 f"{self.settings.status_comment_prefix}: ETA update",
-                f"ETA (carrier local time): {eta_text}",
+                f"ETA (port local time): {eta_port_local_text}",
                 f"Last checked (UTC): {last_checked_display}",
             ]
             if source_link:
@@ -320,7 +322,7 @@ class ClickUpClient:
                 f"{self.settings.status_comment_prefix}: {status.status_text}",
                 f"Line: {shipment.shipping_line}",
                 f"Last checked (UTC): {last_checked_display}",
-                f"ETA (carrier local time): {eta_text}",
+                f"ETA (port local time): {eta_port_local_text}",
             ]
             if source_link:
                 comment_lines.append(f"Carrier source: {source_link}")
@@ -330,7 +332,13 @@ class ClickUpClient:
                 comment_lines.append(f"Container: {shipment.container_no}")
             if status.location:
                 comment_lines.append(f"Location: {status.location}")
-            if status.event_time:
+            event_port_local_time = _format_port_local_time(
+                status.latest_move.event_time_local_text if status.latest_move else None,
+                status.event_time,
+            )
+            if event_port_local_time != "n/a":
+                comment_lines.append(f"Event time (port local): {event_port_local_time}")
+            elif status.event_time:
                 comment_lines.append(f"Event time (UTC): {status.event_time.isoformat()}")
             if status.movement_details:
                 comment_lines.append(f"Last movement details: {status.movement_details}")
@@ -689,13 +697,17 @@ def _format_event_time(local_text: str | None, event_time: datetime | None) -> s
     return format_display_date(local_text, event_time)
 
 
+def _format_port_local_time(local_text: str | None, event_time: datetime | None) -> str:
+    return format_port_local_time(local_text, event_time)
+
+
 def _format_move_line(move: MovementEvent | None, *, now_utc: datetime | None = None) -> str | None:
     if move is None:
         return None
     parts: list[str] = []
     if move.name and move.name.strip():
         parts.append(move.name.strip())
-    event_time = _format_event_time(move.event_time_local_text, move.event_time)
+    event_time = _format_port_local_time(move.event_time_local_text, move.event_time)
     if event_time != "n/a":
         parts.append(event_time)
     if move.location and move.location.strip():
@@ -776,6 +788,7 @@ def _compute_snapshot_hash(
     status: ShipmentStatus,
     status_value: str,
     eta_text: str,
+    eta_port_local_text: str,
 ) -> str:
     latest_move = status.latest_move
     snapshot = {
@@ -783,12 +796,13 @@ def _compute_snapshot_hash(
         "status_value": status_value,
         "status_text": status.status_text or "",
         "eta_text": eta_text,
+        "eta_port_local_text": eta_port_local_text,
         "location": status.location or "",
         "event_time": status.event_time.isoformat() if status.event_time else "",
         "movement_details": status.movement_details or "",
         "latest_move_name": latest_move.name if latest_move else "",
         "latest_move_location": latest_move.location if latest_move else "",
-        "latest_move_time": _format_event_time(
+        "latest_move_time": _format_port_local_time(
             latest_move.event_time_local_text if latest_move else None,
             latest_move.event_time if latest_move else None,
         ),

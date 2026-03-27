@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
+from shipment_sync.date_utils import format_port_local_time
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 
 
@@ -104,7 +105,7 @@ def test_plan_shipment_update_maps_origin_and_destination_events_to_fields() -> 
     assert updates["Gate in empty"].value.date().isoformat() == "2026-03-23"
     assert plan.comment_text is not None
     assert "Last checked (UTC): " in plan.comment_text
-    assert "T" in plan.comment_text
+    assert "ETA (port local time): 2026-03-25 14:00" in plan.comment_text
 
 
 def test_plan_shipment_update_skips_destination_events_until_discharge_exists() -> None:
@@ -216,3 +217,9 @@ def test_plan_shipment_update_only_refreshes_last_checked_when_all_values_match(
     assert plan.comment_text is not None
     assert "No change found" in plan.comment_text
     assert "T&T executed on " in plan.comment_text
+
+
+def test_format_port_local_time_preserves_carrier_clock_time() -> None:
+    assert format_port_local_time("2026-03-27T19:16:00.000Z", None) == "2026-03-27 19:16"
+    assert format_port_local_time("27/03/2026 19:16", None) == "2026-03-27 19:16"
+    assert format_port_local_time("2026-05-02", None) == "2026-05-02"

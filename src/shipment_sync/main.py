@@ -7,7 +7,7 @@ import requests
 from shipment_sync.carriers.registry import build_carrier_registry
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
-from shipment_sync.date_utils import format_display_date
+from shipment_sync.date_utils import format_port_local_time
 from shipment_sync.models import ShipmentRef, ShipmentUpdatePlan
 from shipment_sync.sync import run_sync
 
@@ -84,14 +84,16 @@ def main() -> None:
         if updated_items:
             print("Updated shipments:")
             for item in updated_items:
-                eta_text = _format_date(item.eta_local_text, item.eta_time)
+                eta_text = _format_port_local(item.eta_local_text, item.eta_time)
                 label = f"{item.list_name} ({item.list_id})" if item.list_name else item.list_id
                 if settings.eta_only_mode:
                     latest_move_bits: list[str] = []
                     if item.latest_move_name:
                         latest_move_bits.append(f"latest_move={item.latest_move_name}")
                     if item.latest_move_time_local_text:
-                        latest_move_bits.append(f"latest_move_time={_format_date(item.latest_move_time_local_text, None)}")
+                        latest_move_bits.append(
+                            f"latest_move_time={_format_port_local(item.latest_move_time_local_text, None)}"
+                        )
                     if item.latest_move_location:
                         latest_move_bits.append(f"latest_move_location={item.latest_move_location}")
                     latest_move_suffix = f" | {' | '.join(latest_move_bits)}" if latest_move_bits else ""
@@ -193,8 +195,8 @@ def _print_preview_plan(shipment: ShipmentRef, plan: ShipmentUpdatePlan) -> None
         print("  Planned comment: none")
 
 
-def _format_date(local_text: str | None, event_time) -> str:
-    return format_display_date(local_text, event_time)
+def _format_port_local(local_text: str | None, event_time) -> str:
+    return format_port_local_time(local_text, event_time)
 
 
 def _print_http_error(exc: requests.HTTPError) -> None:
