@@ -22,6 +22,13 @@ class Settings:
     cf_shipment_status: str | None
     cf_status_last_checked: str | None
     cf_track_trace_snapshot: str | None
+    cf_eta: str | None
+    cf_etd: str | None
+    cf_discharge_date: str | None
+    cf_gate_in_full: str | None
+    cf_gate_out_empty: str | None
+    cf_gate_out_delivery: str | None
+    cf_gate_in_empty: str | None
     clickup_include_closed: bool = False
     clickup_include_archived: bool = False
     clickup_use_task_status: bool = False
@@ -96,6 +103,13 @@ class Settings:
             cf_shipment_status=cf_shipment_status,
             cf_status_last_checked=cf_status_last_checked,
             cf_track_trace_snapshot=cf_track_trace_snapshot,
+            cf_eta=_optional("CLICKUP_CF_ETA"),
+            cf_etd=_optional("CLICKUP_CF_ETD"),
+            cf_discharge_date=_optional("CLICKUP_CF_DISCHARGE_DATE"),
+            cf_gate_in_full=_optional("CLICKUP_CF_GATE_IN_FULL"),
+            cf_gate_out_empty=_optional("CLICKUP_CF_GATE_OUT_EMPTY"),
+            cf_gate_out_delivery=_optional("CLICKUP_CF_GATE_OUT_DELIVERY"),
+            cf_gate_in_empty=_optional("CLICKUP_CF_GATE_IN_EMPTY"),
             clickup_include_closed=_bool("CLICKUP_INCLUDE_CLOSED", default=False),
             clickup_include_archived=_bool("CLICKUP_INCLUDE_ARCHIVED", default=False),
             clickup_use_task_status=_bool("CLICKUP_USE_TASK_STATUS", default=False),

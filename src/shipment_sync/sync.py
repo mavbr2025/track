@@ -10,6 +10,7 @@ import requests
 from shipment_sync.carriers.registry import build_carrier_registry
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
+from shipment_sync.models import ShipmentRef
 
 
 @dataclass
@@ -43,9 +44,9 @@ class SyncStats:
     unchanged_by_list: dict[str, int] = field(default_factory=dict)
 
 
-def run_sync(client: ClickUpClient) -> SyncStats:
+def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) -> SyncStats:
     adapters = build_carrier_registry()
-    all_shipments = client.list_shipments()
+    all_shipments = shipments if shipments is not None else client.list_shipments()
 
     updated_items: list[UpdatedShipment] = []
     unchanged = 0

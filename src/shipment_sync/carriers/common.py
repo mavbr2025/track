@@ -263,6 +263,8 @@ def _guess_dcsa_label_from_text(name: str | None) -> str | None:
 
     if "booking confirmed" in normalized:
         return _DCSA_SHIPMENT_LABELS["CONF"]
+    if "empty container release to shipper" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["GTOT"]
     if "empty container returned from customer" in normalized:
         return _DCSA_EQUIPMENT_LABELS["GTIN"]
     if "gate in" in normalized or "gated in" in normalized:

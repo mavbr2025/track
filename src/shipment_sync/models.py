@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -14,6 +15,7 @@ class ShipmentRef:
     last_checked_at: datetime | None = None
     current_status_value: str | None = None
     track_trace_snapshot_hash: str | None = None
+    current_field_values: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -44,3 +46,21 @@ class ShipmentWriteResult:
     changed: bool
     status_value: str
     snapshot_hash: str
+
+
+@dataclass
+class ShipmentFieldWrite:
+    field_id: str
+    value: Any
+    field_type: str = "text"
+    label: str | None = None
+
+
+@dataclass
+class ShipmentUpdatePlan:
+    changed: bool
+    status_value: str
+    snapshot_hash: str
+    custom_field_updates: list[ShipmentFieldWrite] = field(default_factory=list)
+    task_status_update: str | None = None
+    comment_text: str | None = None

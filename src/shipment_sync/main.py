@@ -4,24 +4,39 @@ import sys
 from dotenv import load_dotenv
 import requests
 
+from shipment_sync.carriers.registry import build_carrier_registry
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
 from shipment_sync.date_utils import format_display_date
+from shipment_sync.models import ShipmentRef, ShipmentUpdatePlan
 from shipment_sync.sync import run_sync
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync shipment status to ClickUp")
     parser.add_argument("--dry-run", action="store_true", help="List shipments without updating")
+    parser.add_argument(
+        "--preview-updates",
+        action="store_true",
+        help="Fetch carrier data and print the exact field/comment updates without writing to ClickUp.",
+    )
+    parser.add_argument("--task-id", help="Filter to one ClickUp task ID.")
+    parser.add_argument("--booking", help="Filter to one booking number.")
+    parser.add_argument("--container", help="Filter to one container number.")
     args = parser.parse_args()
 
     load_dotenv()
     try:
         settings = Settings.from_env()
         client = ClickUpClient(settings)
+        shipments = _filter_shipments(
+            client.list_shipments(),
+            task_id=args.task_id,
+            booking=args.booking,
+            container=args.container,
+        )
 
         if args.dry_run:
-            shipments = client.list_shipments()
             print(f"Found {len(shipments)} candidate shipment tasks")
 
             by_list: dict[str, int] = {}
@@ -39,7 +54,11 @@ def main() -> None:
                     print(f"- {label}: {count}")
             return
 
-        stats = run_sync(client)
+        if args.preview_updates:
+            _preview_updates(client, shipments)
+            return
+
+        stats = run_sync(client, shipments=shipments)
         updated_items = stats.updated_items
         skipped = stats.skipped
         print(
@@ -101,6 +120,77 @@ def main() -> None:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
+
+
+def _filter_shipments(
+    shipments: list[ShipmentRef],
+    *,
+    task_id: str | None,
+    booking: str | None,
+    container: str | None,
+) -> list[ShipmentRef]:
+    task_id_norm = (task_id or "").strip()
+    booking_norm = (booking or "").strip().lower()
+    container_norm = (container or "").strip().lower()
+    if not any([task_id_norm, booking_norm, container_norm]):
+        return shipments
+
+    filtered: list[ShipmentRef] = []
+    for shipment in shipments:
+        if task_id_norm and shipment.task_id != task_id_norm:
+            continue
+        if booking_norm and (shipment.booking_no or "").strip().lower() != booking_norm:
+            continue
+        if container_norm and (shipment.container_no or "").strip().lower() != container_norm:
+            continue
+        filtered.append(shipment)
+    return filtered
+
+
+def _preview_updates(client: ClickUpClient, shipments: list[ShipmentRef]) -> None:
+    if not shipments:
+        print("No shipment matches the selected filter.")
+        return
+
+    adapters = build_carrier_registry()
+    print(f"Previewing {len(shipments)} shipment(s)")
+    for shipment in shipments:
+        adapter = adapters.get(shipment.shipping_line)
+        if adapter is None:
+            print(
+                f"- {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
+                "no adapter registered"
+            )
+            continue
+
+        status = adapter.fetch_status(shipment)
+        plan = client.plan_shipment_update(shipment, status)
+        _print_preview_plan(shipment, plan)
+
+
+def _print_preview_plan(shipment: ShipmentRef, plan: ShipmentUpdatePlan) -> None:
+    label = f"{shipment.list_name} ({shipment.list_id})" if shipment.list_name else shipment.list_id
+    print(
+        f"- [{label}] {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
+        f"booking={shipment.booking_no} | container={shipment.container_no} | changed={plan.changed}"
+    )
+    if plan.custom_field_updates:
+        print("  Planned field writes:")
+        for update in plan.custom_field_updates:
+            value = update.value.isoformat() if hasattr(update.value, "isoformat") else str(update.value)
+            label = update.label or update.field_id
+            print(f"  - {label}: {value} [{update.field_id}]")
+    else:
+        print("  Planned field writes: none")
+
+    if plan.task_status_update:
+        print(f"  Planned task status: {plan.task_status_update}")
+    if plan.comment_text:
+        print("  Planned comment:")
+        for line in plan.comment_text.splitlines():
+            print(f"    {line}")
+    else:
+        print("  Planned comment: none")
 
 
 def _format_date(local_text: str | None, event_time) -> str:

@@ -11,7 +11,14 @@ import requests
 
 from .config import Settings
 from .date_utils import format_display_date
-from .models import MovementEvent, ShipmentRef, ShipmentStatus, ShipmentWriteResult
+from .models import (
+    MovementEvent,
+    ShipmentFieldWrite,
+    ShipmentRef,
+    ShipmentStatus,
+    ShipmentUpdatePlan,
+    ShipmentWriteResult,
+)
 
 
 class ClickUpClient:
@@ -101,6 +108,10 @@ class ClickUpClient:
                     last_checked_at=last_checked_at,
                     current_status_value=current_status_value,
                     track_trace_snapshot_hash=track_trace_snapshot_hash,
+                    current_field_values={
+                        field_id: field_payload.get("value")
+                        for field_id, field_payload in fields.items()
+                    },
                 )
             )
         print(f"ClickUp candidate shipment tasks: {len(shipments)}", file=sys.stderr)
@@ -223,9 +234,9 @@ class ClickUpClient:
             page += 1
         return all_tasks
 
-    def update_shipment_status(self, shipment: ShipmentRef, status: ShipmentStatus) -> ShipmentWriteResult:
+    def plan_shipment_update(self, shipment: ShipmentRef, status: ShipmentStatus) -> ShipmentUpdatePlan:
         now_utc = datetime.now(timezone.utc)
-        last_checked_display = now_utc.date().isoformat()
+        last_checked_display = now_utc.isoformat(timespec="seconds")
         eta_text = _format_event_time(status.eta_local_text, status.eta_time)
         status_value = f"ETA {eta_text}" if self.settings.eta_only_mode else status.status_text
         source_link = status.source_url or _extract_first_url(status.raw_source)
@@ -244,39 +255,44 @@ class ClickUpClient:
         elif not previous_snapshot_hash and previous_status_value and previous_status_value == status_value:
             changed = False
 
-        if not changed:
-            if self.settings.cf_status_last_checked:
-                self._set_date_custom_field(shipment.task_id, self.settings.cf_status_last_checked, now_utc)
-            if self.settings.cf_track_trace_snapshot and previous_snapshot_hash != snapshot_hash:
-                self._set_custom_field(shipment.task_id, self.settings.cf_track_trace_snapshot, snapshot_hash)
-            if self.settings.shipment_comment_on_no_change:
-                comment_lines = [
-                    f"{self.settings.status_comment_prefix}: No change",
-                    f"Line: {shipment.shipping_line}",
-                    f"Status remains: {status_value}",
-                    f"Last checked (UTC): {last_checked_display}",
-                ]
-                if source_link:
-                    comment_lines.append(f"Carrier source: {source_link}")
-                self._post_comment(shipment.task_id, "\n".join(comment_lines))
-            return ShipmentWriteResult(changed=False, status_value=status_value, snapshot_hash=snapshot_hash)
-
+        always_field_updates: list[ShipmentFieldWrite] = []
+        candidate_field_updates: list[ShipmentFieldWrite] = []
         if self.settings.cf_shipment_status:
-            self._set_custom_field(shipment.task_id, self.settings.cf_shipment_status, status_value)
-
-        if self.settings.clickup_use_task_status and self.settings.clickup_task_status_on_update:
-            try:
-                self._set_task_status(shipment.task_id, self.settings.clickup_task_status_on_update)
-            except requests.RequestException as exc:
-                print(
-                    f"Task status update failed for {shipment.task_id}: {exc}",
-                    file=sys.stderr,
+            candidate_field_updates.append(
+                ShipmentFieldWrite(
+                    field_id=self.settings.cf_shipment_status,
+                    value=status_value,
+                    field_type="text",
+                    label="Shipment status",
                 )
-
+            )
         if self.settings.cf_status_last_checked:
-            self._set_date_custom_field(shipment.task_id, self.settings.cf_status_last_checked, now_utc)
+            always_field_updates.append(
+                ShipmentFieldWrite(
+                    field_id=self.settings.cf_status_last_checked,
+                    value=now_utc,
+                    field_type="datetime",
+                    label="Last T&T Update",
+                )
+            )
         if self.settings.cf_track_trace_snapshot:
-            self._set_custom_field(shipment.task_id, self.settings.cf_track_trace_snapshot, snapshot_hash)
+            candidate_field_updates.append(
+                ShipmentFieldWrite(
+                    field_id=self.settings.cf_track_trace_snapshot,
+                    value=snapshot_hash,
+                    field_type="text",
+                    label="Track & Trace snapshot",
+                )
+            )
+        candidate_field_updates.extend(_build_direct_event_field_updates(status=status, settings=self.settings))
+        candidate_field_updates = _dedupe_field_updates(candidate_field_updates)
+        changed_field_updates = [
+            update
+            for update in candidate_field_updates
+            if _field_value_changed(update, shipment.current_field_values.get(update.field_id))
+        ]
+        custom_field_updates = _dedupe_field_updates(always_field_updates + changed_field_updates)
+        fields_changed = bool(changed_field_updates)
 
         if self.settings.recent_moves_limit > 0:
             recent_moves = status.recent_moves[: self.settings.recent_moves_limit]
@@ -327,24 +343,69 @@ class ClickUpClient:
             if status.raw_source:
                 comment_lines.append(f"Source trace: {status.raw_source}")
 
-        self._post_comment(shipment.task_id, "\n".join(comment_lines))
-        return ShipmentWriteResult(changed=True, status_value=status_value, snapshot_hash=snapshot_hash)
+        if not fields_changed:
+            no_change_lines = [
+                f"{self.settings.status_comment_prefix}: No change found",
+                f"T&T executed on {last_checked_display}",
+            ]
+            if source_link:
+                no_change_lines.append(f"Carrier source: {source_link}")
+            comment_text = "\n".join(no_change_lines)
+        else:
+            comment_text = "\n".join(comment_lines)
+
+        return ShipmentUpdatePlan(
+            changed=fields_changed,
+            status_value=status_value,
+            snapshot_hash=snapshot_hash,
+            custom_field_updates=custom_field_updates,
+            task_status_update=self.settings.clickup_task_status_on_update
+            if fields_changed and self.settings.clickup_use_task_status and self.settings.clickup_task_status_on_update
+            else None,
+            comment_text=comment_text,
+        )
+
+    def update_shipment_status(self, shipment: ShipmentRef, status: ShipmentStatus) -> ShipmentWriteResult:
+        plan = self.plan_shipment_update(shipment, status)
+
+        for update in plan.custom_field_updates:
+            if update.field_type == "datetime":
+                self._set_date_custom_field(shipment.task_id, update.field_id, update.value, include_time=True)
+            elif update.field_type == "date":
+                self._set_date_custom_field(shipment.task_id, update.field_id, update.value, include_time=False)
+            else:
+                self._set_custom_field(shipment.task_id, update.field_id, str(update.value))
+
+        if plan.task_status_update:
+            try:
+                self._set_task_status(shipment.task_id, plan.task_status_update)
+            except requests.RequestException as exc:
+                print(
+                    f"Task status update failed for {shipment.task_id}: {exc}",
+                    file=sys.stderr,
+                )
+
+        if plan.comment_text:
+            self._post_comment(shipment.task_id, plan.comment_text)
+        return ShipmentWriteResult(
+            changed=plan.changed,
+            status_value=plan.status_value,
+            snapshot_hash=plan.snapshot_hash,
+        )
 
     def _set_custom_field(self, task_id: str, field_id: str, value: str) -> None:
         url = f"{self.base_url}/task/{task_id}/field/{field_id}"
         response = self.session.post(url, json={"value": value}, timeout=30)
         response.raise_for_status()
 
-    def _set_date_custom_field(self, task_id: str, field_id: str, value: datetime) -> None:
+    def _set_date_custom_field(self, task_id: str, field_id: str, value: datetime, *, include_time: bool) -> None:
         url = f"{self.base_url}/task/{task_id}/field/{field_id}"
-        response = self.session.post(
-            url,
-            json={
-                "value": int(value.timestamp() * 1000),
-                "value_options": {"time": True},
-            },
-            timeout=30,
-        )
+        payload: dict[str, Any] = {
+            "value": int(value.timestamp() * 1000),
+        }
+        if include_time:
+            payload["value_options"] = {"time": True}
+        response = self.session.post(url, json=payload, timeout=30)
         response.raise_for_status()
 
     def _set_task_status(self, task_id: str, status_name: str) -> None:
@@ -360,6 +421,165 @@ class ClickUpClient:
 
 def _field_map(custom_fields: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {f["id"]: f for f in custom_fields if "id" in f}
+
+
+def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Settings) -> list[ShipmentFieldWrite]:
+    updates: list[ShipmentFieldWrite] = []
+
+    eta_value = _coerce_display_date(status.eta_local_text, status.eta_time)
+    if settings.cf_eta and eta_value is not None:
+        updates.append(
+            ShipmentFieldWrite(
+                field_id=settings.cf_eta,
+                value=eta_value,
+                field_type="date",
+                label="ETA",
+            )
+        )
+
+    ordered_moves = _order_moves_ascending(status.recent_moves)
+    if not ordered_moves:
+        return updates
+
+    first_discharge_index = next(
+        (idx for idx, move in enumerate(ordered_moves) if _event_code_from_move(move) == "DISC"),
+        None,
+    )
+    pre_discharge_moves = ordered_moves[:first_discharge_index] if first_discharge_index is not None else ordered_moves
+    post_discharge_moves = ordered_moves[first_discharge_index:] if first_discharge_index is not None else []
+
+    updates.extend(
+        _build_move_field_updates(
+            moves=pre_discharge_moves,
+            field_specs=[
+                ("GTIN", settings.cf_gate_in_full, "Gate-in full"),
+                ("GTOT", settings.cf_gate_out_empty, "Gate out empty"),
+                ("DEPA", settings.cf_etd, "ETD"),
+            ],
+        )
+    )
+    updates.extend(
+        _build_move_field_updates(
+            moves=post_discharge_moves,
+            field_specs=[
+                ("DISC", settings.cf_discharge_date, "Discharge date"),
+                ("GTOT", settings.cf_gate_out_delivery, "Gate out delivery"),
+                ("GTIN", settings.cf_gate_in_empty, "Gate in empty"),
+            ],
+        )
+    )
+    return updates
+
+
+def _build_move_field_updates(
+    *,
+    moves: list[MovementEvent],
+    field_specs: list[tuple[str, str | None, str]],
+) -> list[ShipmentFieldWrite]:
+    updates: list[ShipmentFieldWrite] = []
+    for event_code, field_id, label in field_specs:
+        if not field_id:
+            continue
+        move = next((candidate for candidate in moves if _event_code_from_move(candidate) == event_code), None)
+        if move is None:
+            continue
+        date_value = _coerce_display_date(move.event_time_local_text, move.event_time)
+        if date_value is None:
+            continue
+        updates.append(
+            ShipmentFieldWrite(
+                field_id=field_id,
+                value=date_value,
+                field_type="date",
+                label=label,
+            )
+        )
+    return updates
+
+
+def _dedupe_field_updates(updates: list[ShipmentFieldWrite]) -> list[ShipmentFieldWrite]:
+    deduped: dict[str, ShipmentFieldWrite] = {}
+    for update in updates:
+        deduped[update.field_id] = update
+    return list(deduped.values())
+
+
+def _field_value_changed(update: ShipmentFieldWrite, current_value: Any) -> bool:
+    if update.field_type == "date":
+        planned_dt = _parse_datetime_value(update.value)
+        current_dt = _parse_datetime_value(current_value)
+        if planned_dt is None:
+            return current_dt is not None
+        if current_dt is None:
+            return True
+        return planned_dt.date() != current_dt.date()
+
+    if update.field_type == "datetime":
+        planned_dt = _parse_datetime_value(update.value)
+        current_dt = _parse_datetime_value(current_value)
+        if planned_dt is None:
+            return current_dt is not None
+        if current_dt is None:
+            return True
+        return planned_dt.replace(microsecond=0) != current_dt.replace(microsecond=0)
+
+    planned_text = "" if update.value is None else str(update.value).strip()
+    current_text = "" if current_value is None else str(current_value).strip()
+    return planned_text != current_text
+
+
+def _order_moves_ascending(moves: list[MovementEvent]) -> list[MovementEvent]:
+    indexed = list(enumerate(moves))
+    return [
+        move
+        for _, move in sorted(
+            indexed,
+            key=lambda item: (
+                item[1].event_time or datetime.max.replace(tzinfo=timezone.utc),
+                item[0],
+            ),
+        )
+    ]
+
+
+def _event_code_from_move(move: MovementEvent | None) -> str | None:
+    if move is None or not move.name:
+        return None
+    match = re.search(r"\(([A-Z]{4})\)\s*$", move.name.strip())
+    if match:
+        return match.group(1)
+
+    normalized = move.name.strip().lower()
+    if "empty container release to shipper" in normalized:
+        return "GTOT"
+    if "transport departed" in normalized:
+        return "DEPA"
+    if "container discharged" in normalized:
+        return "DISC"
+    if "container loaded" in normalized:
+        return "LOAD"
+    if "gated in" in normalized:
+        return "GTIN"
+    if "gated out" in normalized:
+        return "GTOT"
+    return None
+
+
+def _coerce_display_date(local_text: str | None, event_time: datetime | None) -> datetime | None:
+    rendered = _format_event_time(local_text, event_time)
+    if rendered == "n/a":
+        return None
+    parsed = _parse_datetime_value(rendered)
+    if parsed is not None:
+        return _normalize_date_only(parsed)
+    if event_time is not None:
+        return _normalize_date_only(event_time)
+    return None
+
+
+def _normalize_date_only(value: datetime) -> datetime:
+    normalized = value.astimezone(timezone.utc)
+    return normalized.replace(hour=12, minute=0, second=0, microsecond=0)
 
 
 def _is_open_task(task: dict[str, Any]) -> bool:
@@ -419,6 +639,11 @@ def _parse_last_checked(field: dict[str, Any] | None) -> datetime | None:
 def _parse_datetime_value(value: Any) -> datetime | None:
     if value is None:
         return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     if isinstance(value, (int, float)):
         return _from_unix_maybe_ms(float(value))
