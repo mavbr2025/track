@@ -57,16 +57,19 @@ def test_plan_shipment_update_maps_origin_and_destination_events_to_fields() -> 
                 name="Container Gated In (GTIN)",
                 location="PUERTO QUETZAL",
                 event_time=datetime(2026, 3, 23, 18, 0, tzinfo=timezone.utc),
+                event_state="actual",
             ),
             MovementEvent(
                 name="Container Gated Out (GTOT)",
                 location="PUERTO QUETZAL",
                 event_time=datetime(2026, 3, 23, 12, 0, tzinfo=timezone.utc),
+                event_state="actual",
             ),
             MovementEvent(
                 name="Container Discharged (DISC)",
                 location="PUERTO QUETZAL",
                 event_time=datetime(2026, 3, 22, 9, 0, tzinfo=timezone.utc),
+                event_state="actual",
             ),
             MovementEvent(
                 name="Transport Departed (DEPA)",
@@ -150,6 +153,106 @@ def test_plan_shipment_update_skips_destination_events_until_discharge_exists() 
     assert "Gate in empty" not in updates
 
 
+def test_plan_shipment_update_skips_estimated_destination_dates() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-2b",
+        task_name="Shipment 2B",
+        shipping_line="maersk",
+        booking_no="BOOK-2B",
+        container_no="CONT-2B",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="Destination ETA pending",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 3, 24, 18, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Container Gated Out (GTOT)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 3, 23, 9, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="NINGBO, ZHEJIANG",
+                event_time=datetime(2026, 2, 10, 18, 0, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert "ETD" in updates
+    assert "Discharge date" not in updates
+    assert "Gate out delivery" not in updates
+    assert "Gate in empty" not in updates
+
+
+def test_plan_shipment_update_clears_estimated_destination_dates_already_in_clickup() -> None:
+    client = ClickUpClient(_settings())
+
+    def ms(year: int, month: int, day: int) -> str:
+        return str(int(datetime(year, month, day, 12, 0, tzinfo=timezone.utc).timestamp() * 1000))
+
+    shipment = ShipmentRef(
+        task_id="task-2c",
+        task_name="Shipment 2C",
+        shipping_line="maersk",
+        booking_no="BOOK-2C",
+        container_no="CONT-2C",
+        list_id="list-1",
+        current_field_values={
+            "disc-field": ms(2026, 3, 23),
+            "gtot-delivery-field": ms(2026, 3, 24),
+            "gtin-empty-field": ms(2026, 3, 24),
+        },
+    )
+    status = ShipmentStatus(
+        status_text="Destination ETA pending",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 3, 24, 18, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Container Gated Out (GTOT)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 3, 23, 9, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert plan.changed is True
+    assert updates["Discharge date"].value is None
+    assert updates["Gate out delivery"].value is None
+    assert updates["Gate in empty"].value is None
+
+
 def test_plan_shipment_update_only_refreshes_last_checked_when_all_values_match() -> None:
     client = ClickUpClient(_settings())
     def ms(year: int, month: int, day: int) -> str:
@@ -181,16 +284,19 @@ def test_plan_shipment_update_only_refreshes_last_checked_when_all_values_match(
                 name="Container Gated In (GTIN)",
                 location="PUERTO QUETZAL",
                 event_time=datetime(2026, 5, 6, 0, 0, tzinfo=timezone.utc),
+                event_state="actual",
             ),
             MovementEvent(
                 name="Container Gated Out (GTOT)",
                 location="PUERTO QUETZAL",
                 event_time=datetime(2026, 5, 5, 0, 0, tzinfo=timezone.utc),
+                event_state="actual",
             ),
             MovementEvent(
                 name="Container Discharged (DISC)",
                 location="PUERTO QUETZAL",
                 event_time=datetime(2026, 5, 5, 0, 0, tzinfo=timezone.utc),
+                event_state="actual",
             ),
             MovementEvent(
                 name="Transport Departed (DEPA)",

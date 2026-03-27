@@ -406,12 +406,10 @@ class ClickUpClient:
         response = self.session.post(url, json={"value": value}, timeout=30)
         response.raise_for_status()
 
-    def _set_date_custom_field(self, task_id: str, field_id: str, value: datetime, *, include_time: bool) -> None:
+    def _set_date_custom_field(self, task_id: str, field_id: str, value: datetime | None, *, include_time: bool) -> None:
         url = f"{self.base_url}/task/{task_id}/field/{field_id}"
-        payload: dict[str, Any] = {
-            "value": int(value.timestamp() * 1000),
-        }
-        if include_time:
+        payload: dict[str, Any] = {"value": None if value is None else int(value.timestamp() * 1000)}
+        if include_time and value is not None:
             payload["value_options"] = {"time": True}
         response = self.session.post(url, json=payload, timeout=30)
         response.raise_for_status()
@@ -460,9 +458,9 @@ def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Setti
         _build_move_field_updates(
             moves=pre_discharge_moves,
             field_specs=[
-                ("GTIN", settings.cf_gate_in_full, "Gate-in full"),
-                ("GTOT", settings.cf_gate_out_empty, "Gate out empty"),
-                ("DEPA", settings.cf_etd, "ETD"),
+                ("GTIN", settings.cf_gate_in_full, "Gate-in full", False),
+                ("GTOT", settings.cf_gate_out_empty, "Gate out empty", False),
+                ("DEPA", settings.cf_etd, "ETD", False),
             ],
         )
     )
@@ -470,9 +468,9 @@ def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Setti
         _build_move_field_updates(
             moves=post_discharge_moves,
             field_specs=[
-                ("DISC", settings.cf_discharge_date, "Discharge date"),
-                ("GTOT", settings.cf_gate_out_delivery, "Gate out delivery"),
-                ("GTIN", settings.cf_gate_in_empty, "Gate in empty"),
+                ("DISC", settings.cf_discharge_date, "Discharge date", True),
+                ("GTOT", settings.cf_gate_out_delivery, "Gate out delivery", True),
+                ("GTIN", settings.cf_gate_in_empty, "Gate in empty", True),
             ],
         )
     )
@@ -482,14 +480,24 @@ def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Setti
 def _build_move_field_updates(
     *,
     moves: list[MovementEvent],
-    field_specs: list[tuple[str, str | None, str]],
+    field_specs: list[tuple[str, str | None, str, bool]],
 ) -> list[ShipmentFieldWrite]:
     updates: list[ShipmentFieldWrite] = []
-    for event_code, field_id, label in field_specs:
+    for event_code, field_id, label, actual_only in field_specs:
         if not field_id:
             continue
         move = next((candidate for candidate in moves if _event_code_from_move(candidate) == event_code), None)
         if move is None:
+            continue
+        if actual_only and not _move_is_actual(move):
+            updates.append(
+                ShipmentFieldWrite(
+                    field_id=field_id,
+                    value=None,
+                    field_type="date",
+                    label=label,
+                )
+            )
             continue
         date_value = _coerce_display_date(move.event_time_local_text, move.event_time)
         if date_value is None:
@@ -588,6 +596,10 @@ def _coerce_display_date(local_text: str | None, event_time: datetime | None) ->
 def _normalize_date_only(value: datetime) -> datetime:
     normalized = value.astimezone(timezone.utc)
     return normalized.replace(hour=12, minute=0, second=0, microsecond=0)
+
+
+def _move_is_actual(move: MovementEvent) -> bool:
+    return _normalize_event_state(move.event_state) == "actual"
 
 
 def _is_open_task(task: dict[str, Any]) -> bool:
