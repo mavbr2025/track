@@ -17,7 +17,7 @@ services:
       - key: SHIPMENT_PREFLIGHT_ENABLED
         value: "true"
       - key: SHIPMENT_MIN_SYNC_INTERVAL_HOURS
-        value: "2"
+        value: "8"
       - key: CLICKUP_DISCOVER_LISTS_FROM_SPACES
         value: "true"
       - key: MSC_USE_PLAYWRIGHT
@@ -67,13 +67,13 @@ services:
     branch: main
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    schedule: "0 */2 * * *"
+    schedule: "0 */8 * * *"
     dockerCommand: ./scripts/run_sync.sh
     envVars:
       - key: SHIPMENT_PREFLIGHT_ENABLED
         value: "true"
       - key: SHIPMENT_MIN_SYNC_INTERVAL_HOURS
-        value: "2"
+        value: "8"
       - key: CLICKUP_DISCOVER_LISTS_FROM_SPACES
         value: "true"
       - key: MSC_USE_PLAYWRIGHT
