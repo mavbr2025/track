@@ -18,6 +18,7 @@ from shipment_sync.carriers.common import (
     to_dcsa_movement_name,
 )
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
+from shipment_sync.playwright_runner import run_sync_playwright
 
 
 class HapagLloydAdapter(CarrierAdapter):
@@ -202,45 +203,48 @@ class HapagLloydAdapter(CarrierAdapter):
         )
 
     def _playwright_request(self, *, reference: str, ref_type_code: str) -> ShipmentStatus:
-        try:
-            from playwright.sync_api import sync_playwright
-        except Exception as exc:
-            raise ValueError("Playwright is not installed. Run: pip install -e .[browser]") from exc
+        def _run() -> ShipmentStatus:
+            try:
+                from playwright.sync_api import sync_playwright
+            except Exception as exc:
+                raise ValueError("Playwright is not installed. Run: pip install -e .[browser]") from exc
 
-        timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
-        normalized_mode = ref_type_code.strip().lower()
-        landing_url = self._build_playwright_landing_url(ref_type_code=normalized_mode)
-        target_url = self._build_playwright_url(reference=reference, ref_type_code=ref_type_code)
-        try:
-            page = self._get_or_create_playwright_page(sync_playwright)
-            self._warm_playwright_session(
-                page,
-                landing_url=landing_url,
-                mode=normalized_mode,
-                timeout_ms=timeout_ms,
-            )
-            page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-            _wait_for_hapag_result_page(
-                page,
-                timeout_ms=timeout_ms,
-                challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
-                reload_attempts=self.playwright_challenge_reload_attempts,
-                post_load_delay_seconds=self.playwright_request_delay_seconds,
-            )
+            timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
+            normalized_mode = ref_type_code.strip().lower()
+            landing_url = self._build_playwright_landing_url(ref_type_code=normalized_mode)
+            target_url = self._build_playwright_url(reference=reference, ref_type_code=ref_type_code)
+            try:
+                page = self._get_or_create_playwright_page(sync_playwright)
+                self._warm_playwright_session(
+                    page,
+                    landing_url=landing_url,
+                    mode=normalized_mode,
+                    timeout_ms=timeout_ms,
+                )
+                page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                _wait_for_hapag_result_page(
+                    page,
+                    timeout_ms=timeout_ms,
+                    challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
+                    reload_attempts=self.playwright_challenge_reload_attempts,
+                    post_load_delay_seconds=self.playwright_request_delay_seconds,
+                )
 
-            html = page.content()
-            return _status_from_page(
-                html=html,
-                source_url=page.url,
-                eta_only_mode=self.eta_only_mode,
-            )
-        except Exception as exc:
-            if _should_reset_playwright_session(exc):
-                self._reset_playwright_session()
-            raise
-        finally:
-            if not self.playwright_session_reuse:
-                self._reset_playwright_session()
+                html = page.content()
+                return _status_from_page(
+                    html=html,
+                    source_url=page.url,
+                    eta_only_mode=self.eta_only_mode,
+                )
+            except Exception as exc:
+                if _should_reset_playwright_session(exc):
+                    self._reset_playwright_session()
+                raise
+            finally:
+                if not self.playwright_session_reuse:
+                    self._reset_playwright_session()
+
+        return run_sync_playwright(_run)
 
     def _validate_configuration(self) -> None:
         if self.url_template:

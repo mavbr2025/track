@@ -10,6 +10,7 @@ from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import extract_first, parse_event_time, to_dcsa_movement_name
 from shipment_sync.carriers.generic_line import GenericLineAdapter
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
+from shipment_sync.playwright_runner import run_sync_playwright
 
 
 class MscAdapter(CarrierAdapter):
@@ -112,112 +113,115 @@ class MscAdapter(CarrierAdapter):
         raise ValueError("MSC Playwright request failed without specific error")
 
     def _playwright_request(self, *, reference: str, tracking_mode: str) -> tuple[dict[str, Any], str]:
-        try:
-            from playwright.sync_api import sync_playwright
-        except Exception as exc:
-            raise ValueError("Playwright is not installed. Run: pip install -e .[browser] && playwright install") from exc
-
-        timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
-        with sync_playwright() as p:
-            browser_type = getattr(p, self.playwright_browser, None)
-            if browser_type is None:
-                raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
-
-            launch_kwargs: dict[str, Any] = {
-                "headless": self.playwright_headless,
-                "args": ["--disable-blink-features=AutomationControlled"],
-            }
-            if self.playwright_channel and self.playwright_browser == "chromium":
-                launch_kwargs["channel"] = self.playwright_channel
-
-            browser = browser_type.launch(**launch_kwargs)
+        def _run() -> tuple[dict[str, Any], str]:
             try:
-                context = browser.new_context(
-                    user_agent=self.playwright_user_agent,
-                    locale=self.playwright_locale,
-                    viewport={"width": 1440, "height": 900},
-                )
-                context.set_extra_http_headers(
-                    {
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                        "Accept-Language": "en-US,en;q=0.9",
-                    }
-                )
-                context.add_init_script(_STEALTH_INIT_SCRIPT)
-                page = context.new_page()
-                page.goto(self.tracking_page_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                _wait_for_msc_page_ready(
-                    page,
-                    timeout_ms=timeout_ms,
-                    challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
-                    reload_attempts=self.playwright_challenge_reload_attempts,
-                )
-                page.wait_for_selector(
-                    "input[name='__RequestVerificationToken']",
-                    timeout=timeout_ms,
-                    state="attached",
-                )
+                from playwright.sync_api import sync_playwright
+            except Exception as exc:
+                raise ValueError("Playwright is not installed. Run: pip install -e .[browser] && playwright install") from exc
 
-                html = page.content().lower()
-                if "access denied" in html:
-                    raise ValueError("MSC page access denied in browser session")
+            timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
+            with sync_playwright() as p:
+                browser_type = getattr(p, self.playwright_browser, None)
+                if browser_type is None:
+                    raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
 
-                token = page.locator("input[name='__RequestVerificationToken']").first.get_attribute("value")
-                if not token:
-                    raise ValueError("MSC request verification token not found in page")
+                launch_kwargs: dict[str, Any] = {
+                    "headless": self.playwright_headless,
+                    "args": ["--disable-blink-features=AutomationControlled"],
+                }
+                if self.playwright_channel and self.playwright_browser == "chromium":
+                    launch_kwargs["channel"] = self.playwright_channel
 
-                if self.playwright_request_delay_seconds > 0:
-                    page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
-
-                response_payload = page.evaluate(
-                    """
-                    async ({ url, token, trackingMode, reference }) => {
-                        const body = new URLSearchParams({
-                            "__RequestVerificationToken": token,
-                            "trackingMode": trackingMode,
-                            "trackingNumber": reference,
-                        });
-                        const response = await fetch(url, {
-                            method: "POST",
-                            credentials: "same-origin",
-                            headers: {
-                                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                                "X-Requested-With": "XMLHttpRequest",
-                                "Accept": "application/json, text/plain, */*",
-                            },
-                            body,
-                        });
-                        const text = await response.text();
-                        return {
-                            status: response.status,
-                            text,
-                            url: response.url,
-                        };
-                    }
-                    """,
-                    {
-                        "url": self.tracking_api_url,
-                        "token": token,
-                        "trackingMode": tracking_mode,
-                        "reference": reference,
-                    },
-                )
-                response_status = int(response_payload.get("status", 0))
-                response_text = str(response_payload.get("text", ""))
-                response_url = str(response_payload.get("url", self.tracking_api_url))
-                if response_status >= 400:
-                    snippet = response_text.strip().replace("\n", " ")[:240]
-                    raise ValueError(f"MSC TrackingInfo failed HTTP {response_status}: {snippet}")
+                browser = browser_type.launch(**launch_kwargs)
                 try:
-                    payload = page.evaluate("payload => JSON.parse(payload)", response_text)
-                except Exception as exc:
-                    snippet = response_text.strip().replace("\n", " ")[:240]
-                    raise ValueError(f"MSC TrackingInfo returned non-JSON payload: {snippet}") from exc
-                if not isinstance(payload, dict):
-                    raise ValueError("MSC TrackingInfo returned non-object JSON payload")
-                return payload, f"msc-playwright:{response_url}"
-            finally:
-                browser.close()
+                    context = browser.new_context(
+                        user_agent=self.playwright_user_agent,
+                        locale=self.playwright_locale,
+                        viewport={"width": 1440, "height": 900},
+                    )
+                    context.set_extra_http_headers(
+                        {
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.9",
+                        }
+                    )
+                    context.add_init_script(_STEALTH_INIT_SCRIPT)
+                    page = context.new_page()
+                    page.goto(self.tracking_page_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    _wait_for_msc_page_ready(
+                        page,
+                        timeout_ms=timeout_ms,
+                        challenge_timeout_seconds=self.playwright_challenge_timeout_seconds,
+                        reload_attempts=self.playwright_challenge_reload_attempts,
+                    )
+                    page.wait_for_selector(
+                        "input[name='__RequestVerificationToken']",
+                        timeout=timeout_ms,
+                        state="attached",
+                    )
+
+                    html = page.content().lower()
+                    if "access denied" in html:
+                        raise ValueError("MSC page access denied in browser session")
+
+                    token = page.locator("input[name='__RequestVerificationToken']").first.get_attribute("value")
+                    if not token:
+                        raise ValueError("MSC request verification token not found in page")
+
+                    if self.playwright_request_delay_seconds > 0:
+                        page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
+
+                    response_payload = page.evaluate(
+                        """
+                        async ({ url, token, trackingMode, reference }) => {
+                            const body = new URLSearchParams({
+                                "__RequestVerificationToken": token,
+                                "trackingMode": trackingMode,
+                                "trackingNumber": reference,
+                            });
+                            const response = await fetch(url, {
+                                method: "POST",
+                                credentials: "same-origin",
+                                headers: {
+                                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                                    "X-Requested-With": "XMLHttpRequest",
+                                    "Accept": "application/json, text/plain, */*",
+                                },
+                                body,
+                            });
+                            const text = await response.text();
+                            return {
+                                status: response.status,
+                                text,
+                                url: response.url,
+                            };
+                        }
+                        """,
+                        {
+                            "url": self.tracking_api_url,
+                            "token": token,
+                            "trackingMode": tracking_mode,
+                            "reference": reference,
+                        },
+                    )
+                    response_status = int(response_payload.get("status", 0))
+                    response_text = str(response_payload.get("text", ""))
+                    response_url = str(response_payload.get("url", self.tracking_api_url))
+                    if response_status >= 400:
+                        snippet = response_text.strip().replace("\n", " ")[:240]
+                        raise ValueError(f"MSC TrackingInfo failed HTTP {response_status}: {snippet}")
+                    try:
+                        payload = page.evaluate("payload => JSON.parse(payload)", response_text)
+                    except Exception as exc:
+                        snippet = response_text.strip().replace("\n", " ")[:240]
+                        raise ValueError(f"MSC TrackingInfo returned non-JSON payload: {snippet}") from exc
+                    if not isinstance(payload, dict):
+                        raise ValueError("MSC TrackingInfo returned non-object JSON payload")
+                    return payload, f"msc-playwright:{response_url}"
+                finally:
+                    browser.close()
+
+        return run_sync_playwright(_run)
 
 
 def _build_reference_attempts(shipment: ShipmentRef) -> list[tuple[str, str]]:

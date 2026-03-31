@@ -14,6 +14,7 @@ from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import parse_event_time
 from shipment_sync.carriers.generic_line import GenericLineAdapter
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
+from shipment_sync.playwright_runner import run_sync_playwright
 
 
 class WanHaiAdapter(CarrierAdapter):
@@ -85,74 +86,77 @@ class WanHaiAdapter(CarrierAdapter):
         raise ValueError("Wan Hai Playwright request failed without specific error")
 
     def _playwright_request(self, *, reference: str, cargo_type: str) -> ShipmentStatus:
-        try:
-            from playwright.sync_api import sync_playwright
-        except Exception as exc:
-            raise ValueError("Playwright is not installed. Run: pip install -e .[browser]") from exc
-
-        timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
-        with sync_playwright() as p:
-            browser_type = getattr(p, self.playwright_browser, None)
-            if browser_type is None:
-                raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
-
-            launch_kwargs: dict[str, Any] = {"headless": self.playwright_headless}
-            if self.playwright_channel and self.playwright_browser == "chromium":
-                launch_kwargs["channel"] = self.playwright_channel
-
-            browser = browser_type.launch(**launch_kwargs)
+        def _run() -> ShipmentStatus:
             try:
-                context_kwargs: dict[str, Any] = {}
-                if self.playwright_user_agent:
-                    context_kwargs["user_agent"] = self.playwright_user_agent
-                if self.playwright_locale:
-                    context_kwargs["locale"] = self.playwright_locale
-                context = browser.new_context(**context_kwargs)
-                page = context.new_page()
-                page.goto(self.tracking_page_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                if self.playwright_request_delay_seconds > 0:
-                    page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
+                from playwright.sync_api import sync_playwright
+            except Exception as exc:
+                raise ValueError("Playwright is not installed. Run: pip install -e .[browser]") from exc
 
-                html = page.content()
-                if 'form id="cargoTrackV2Bean"' not in html:
-                    raise ValueError("Wan Hai query form not available; browser likely blocked by anti-bot protection")
+            timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
+            with sync_playwright() as p:
+                browser_type = getattr(p, self.playwright_browser, None)
+                if browser_type is None:
+                    raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
 
-                page.select_option("#cargoType", cargo_type)
-                page.fill("#q_ref_no1", reference)
-                with page.expect_popup(timeout=timeout_ms) as popup_info:
-                    page.click("#Query")
-                results_page = popup_info.value
-                results_page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-                if self.playwright_request_delay_seconds > 0:
-                    results_page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
+                launch_kwargs: dict[str, Any] = {"headless": self.playwright_headless}
+                if self.playwright_channel and self.playwright_browser == "chromium":
+                    launch_kwargs["channel"] = self.playwright_channel
 
-                result_html = results_page.content()
-                result_data = _parse_result_page(result_html, cargo_type=cargo_type)
-                if result_data is None:
-                    raise ValueError(f"Wan Hai returned no results for reference {reference}")
+                browser = browser_type.launch(**launch_kwargs)
+                try:
+                    context_kwargs: dict[str, Any] = {}
+                    if self.playwright_user_agent:
+                        context_kwargs["user_agent"] = self.playwright_user_agent
+                    if self.playwright_locale:
+                        context_kwargs["locale"] = self.playwright_locale
+                    context = browser.new_context(**context_kwargs)
+                    page = context.new_page()
+                    page.goto(self.tracking_page_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    if self.playwright_request_delay_seconds > 0:
+                        page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
 
-                detail = None
-                booking_reference = result_data.get("booking_reference")
-                if booking_reference:
-                    try:
-                        with results_page.expect_popup(timeout=timeout_ms) as detail_popup_info:
-                            results_page.get_by_text("Booking Data").first.click()
-                        detail_page = detail_popup_info.value
-                        detail_page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-                        if self.playwright_request_delay_seconds > 0:
-                            detail_page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
-                        detail = _parse_booking_detail_page(detail_page.content())
-                    except Exception:
-                        detail = None
+                    html = page.content()
+                    if 'form id="cargoTrackV2Bean"' not in html:
+                        raise ValueError("Wan Hai query form not available; browser likely blocked by anti-bot protection")
 
-                return _status_from_parsed(
-                    cargo_type=cargo_type,
-                    result=result_data,
-                    detail=detail,
-                    source_url=results_page.url,
-                )
-            finally:
-                browser.close()
+                    page.select_option("#cargoType", cargo_type)
+                    page.fill("#q_ref_no1", reference)
+                    with page.expect_popup(timeout=timeout_ms) as popup_info:
+                        page.click("#Query")
+                    results_page = popup_info.value
+                    results_page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                    if self.playwright_request_delay_seconds > 0:
+                        results_page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
+
+                    result_html = results_page.content()
+                    result_data = _parse_result_page(result_html, cargo_type=cargo_type)
+                    if result_data is None:
+                        raise ValueError(f"Wan Hai returned no results for reference {reference}")
+
+                    detail = None
+                    booking_reference = result_data.get("booking_reference")
+                    if booking_reference:
+                        try:
+                            with results_page.expect_popup(timeout=timeout_ms) as detail_popup_info:
+                                results_page.get_by_text("Booking Data").first.click()
+                            detail_page = detail_popup_info.value
+                            detail_page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                            if self.playwright_request_delay_seconds > 0:
+                                detail_page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
+                            detail = _parse_booking_detail_page(detail_page.content())
+                        except Exception:
+                            detail = None
+
+                    return _status_from_parsed(
+                        cargo_type=cargo_type,
+                        result=result_data,
+                        detail=detail,
+                        source_url=results_page.url,
+                    )
+                finally:
+                    browser.close()
+
+        return run_sync_playwright(_run)
 
 
 def _build_reference_attempts(shipment: ShipmentRef) -> list[tuple[str, str]]:
