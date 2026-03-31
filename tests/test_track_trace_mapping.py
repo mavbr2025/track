@@ -8,8 +8,8 @@ from shipment_sync.date_utils import format_port_local_time
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 
 
-def _settings() -> Settings:
-    return Settings(
+def _settings(**overrides: object) -> Settings:
+    base = dict(
         clickup_api_token="token",
         clickup_oauth_access_token=None,
         clickup_oauth_client_id=None,
@@ -36,6 +36,8 @@ def _settings() -> Settings:
         cf_gate_out_delivery="gtot-delivery-field",
         cf_gate_in_empty="gtin-empty-field",
     )
+    base.update(overrides)
+    return Settings(**base)
 
 
 def test_plan_shipment_update_maps_origin_and_destination_events_to_fields() -> None:
@@ -320,9 +322,80 @@ def test_plan_shipment_update_only_refreshes_last_checked_when_all_values_match(
 
     assert plan.changed is False
     assert [update.label for update in plan.custom_field_updates] == ["Last T&T Update"]
+    assert plan.comment_text is None
+
+
+def test_plan_shipment_update_can_optionally_post_no_change_comment() -> None:
+    client = ClickUpClient(_settings(shipment_comment_on_no_change=True))
+
+    def ms(year: int, month: int, day: int) -> str:
+        return str(int(datetime(year, month, day, 12, 0, tzinfo=timezone.utc).timestamp() * 1000))
+
+    shipment = ShipmentRef(
+        task_id="task-3b",
+        task_name="Shipment 3B",
+        shipping_line="one",
+        booking_no="BOOK-3B",
+        container_no="CONT-3B",
+        list_id="list-1",
+        current_field_values={
+            "eta-field": ms(2026, 5, 5),
+            "etd-field": ms(2026, 2, 25),
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA 2026-05-05",
+        eta_time=datetime(2026, 5, 5, 8, 0, tzinfo=timezone.utc),
+        eta_local_text="2026-05-05",
+        recent_moves=[
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="NINGBO, ZHEJIANG",
+                event_time=datetime(2026, 2, 25, 0, 0, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.changed is False
     assert plan.comment_text is not None
     assert "No change found" in plan.comment_text
     assert "T&T executed on " in plan.comment_text
+
+
+def test_plan_shipment_update_uses_latest_pre_discharge_departure_for_etd() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-4",
+        task_name="Shipment 4",
+        shipping_line="one",
+        booking_no="BOOK-4",
+        container_no="CONT-4",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        recent_moves=[
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="JIANGMEN, GUANGDONG",
+                event_time=datetime(2026, 3, 28, 23, 20, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="JIANGMEN, GUANGDONG",
+                event_time=datetime(2026, 3, 30, 23, 20, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["ETD"].value.date().isoformat() == "2026-03-30"
 
 
 def test_format_port_local_time_preserves_carrier_clock_time() -> None:

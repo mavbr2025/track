@@ -351,7 +351,7 @@ class ClickUpClient:
             if status.raw_source:
                 comment_lines.append(f"Source trace: {status.raw_source}")
 
-        if not fields_changed:
+        if not fields_changed and self.settings.shipment_comment_on_no_change:
             no_change_lines = [
                 f"{self.settings.status_comment_prefix}: No change found",
                 f"T&T executed on {last_checked_display}",
@@ -359,8 +359,10 @@ class ClickUpClient:
             if source_link:
                 no_change_lines.append(f"Carrier source: {source_link}")
             comment_text = "\n".join(no_change_lines)
-        else:
+        elif fields_changed:
             comment_text = "\n".join(comment_lines)
+        else:
+            comment_text = None
 
         return ShipmentUpdatePlan(
             changed=fields_changed,
@@ -460,10 +462,21 @@ def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Setti
             field_specs=[
                 ("GTIN", settings.cf_gate_in_full, "Gate-in full", False),
                 ("GTOT", settings.cf_gate_out_empty, "Gate out empty", False),
-                ("DEPA", settings.cf_etd, "ETD", False),
             ],
         )
     )
+    etd_move = _pick_latest_departure_move(pre_discharge_moves)
+    if settings.cf_etd and etd_move is not None:
+        etd_value = _coerce_display_date(etd_move.event_time_local_text, etd_move.event_time)
+        if etd_value is not None:
+            updates.append(
+                ShipmentFieldWrite(
+                    field_id=settings.cf_etd,
+                    value=etd_value,
+                    field_type="date",
+                    label="ETD",
+                )
+            )
     updates.extend(
         _build_move_field_updates(
             moves=post_discharge_moves,
@@ -511,6 +524,16 @@ def _build_move_field_updates(
             )
         )
     return updates
+
+
+def _pick_latest_departure_move(moves: list[MovementEvent]) -> MovementEvent | None:
+    departures = [move for move in moves if _event_code_from_move(move) == "DEPA"]
+    if not departures:
+        return None
+
+    actual_departures = [move for move in departures if _move_is_actual(move)]
+    candidates = actual_departures or departures
+    return candidates[-1]
 
 
 def _dedupe_field_updates(updates: list[ShipmentFieldWrite]) -> list[ShipmentFieldWrite]:
