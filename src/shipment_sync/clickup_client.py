@@ -465,7 +465,7 @@ def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Setti
             ],
         )
     )
-    etd_move = _pick_latest_departure_move(pre_discharge_moves)
+    etd_move = _pick_etd_move(pre_discharge_moves)
     if settings.cf_etd and etd_move is not None:
         etd_value = _coerce_display_date(etd_move.event_time_local_text, etd_move.event_time)
         if etd_value is not None:
@@ -526,14 +526,69 @@ def _build_move_field_updates(
     return updates
 
 
-def _pick_latest_departure_move(moves: list[MovementEvent]) -> MovementEvent | None:
+def _pick_etd_move(moves: list[MovementEvent]) -> MovementEvent | None:
     departures = [move for move in moves if _event_code_from_move(move) == "DEPA"]
     if not departures:
         return None
 
+    first_actual_load_index = next(
+        (
+            idx
+            for idx, move in enumerate(moves)
+            if _event_code_from_move(move) == "LOAD" and _move_is_actual(move)
+        ),
+        None,
+    )
+    if first_actual_load_index is not None:
+        load_move = moves[first_actual_load_index]
+        later_moves = moves[first_actual_load_index + 1 :]
+        same_port_actual = [
+            move
+            for move in later_moves
+            if _event_code_from_move(move) == "DEPA"
+            and _move_is_actual(move)
+            and _locations_match(move.location, load_move.location)
+        ]
+        if same_port_actual:
+            return same_port_actual[0]
+
+        same_port_any = [
+            move
+            for move in later_moves
+            if _event_code_from_move(move) == "DEPA"
+            and _locations_match(move.location, load_move.location)
+        ]
+        if same_port_any:
+            return same_port_any[0]
+
+        later_actual = [
+            move
+            for move in later_moves
+            if _event_code_from_move(move) == "DEPA" and _move_is_actual(move)
+        ]
+        if later_actual:
+            return later_actual[0]
+
+        later_departures = [move for move in later_moves if _event_code_from_move(move) == "DEPA"]
+        if later_departures:
+            return later_departures[0]
+
     actual_departures = [move for move in departures if _move_is_actual(move)]
     candidates = actual_departures or departures
     return candidates[-1]
+
+
+def _locations_match(left: str | None, right: str | None) -> bool:
+    left_key = _location_key(left)
+    right_key = _location_key(right)
+    return bool(left_key and right_key and left_key == right_key)
+
+
+def _location_key(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = re.sub(r"\s+", " ", value.strip().upper())
+    return normalized or None
 
 
 def _dedupe_field_updates(updates: list[ShipmentFieldWrite]) -> list[ShipmentFieldWrite]:

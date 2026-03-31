@@ -364,7 +364,7 @@ def test_plan_shipment_update_can_optionally_post_no_change_comment() -> None:
     assert "T&T executed on " in plan.comment_text
 
 
-def test_plan_shipment_update_uses_latest_pre_discharge_departure_for_etd() -> None:
+def test_plan_shipment_update_prefers_first_load_port_departure_for_etd() -> None:
     client = ClickUpClient(_settings())
     shipment = ShipmentRef(
         task_id="task-4",
@@ -372,6 +372,76 @@ def test_plan_shipment_update_uses_latest_pre_discharge_departure_for_etd() -> N
         shipping_line="one",
         booking_no="BOOK-4",
         container_no="CONT-4",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated Out (GTOT)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 6, 20, 1, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 8, 8, 30, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 11, 8, 28, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 11, 11, 29, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 17, 12, 54, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 17, 13, 54, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 17, 18, 54, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="LAZARO CARDENAS",
+                event_time=datetime(2026, 4, 30, 4, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["ETD"].value.date().isoformat() == "2026-03-11"
+
+
+def test_plan_shipment_update_falls_back_to_latest_departure_when_load_port_is_missing() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-5",
+        task_name="Shipment 5",
+        shipping_line="one",
+        booking_no="BOOK-5",
+        container_no="CONT-5",
         list_id="list-1",
     )
     status = ShipmentStatus(
