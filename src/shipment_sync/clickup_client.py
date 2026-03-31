@@ -531,6 +531,20 @@ def _pick_etd_move(moves: list[MovementEvent]) -> MovementEvent | None:
     if not departures:
         return None
 
+    origin_location = next(
+        (_location_key(move.location) for move in moves if move.event_time is not None and _location_key(move.location)),
+        None,
+    )
+    if origin_location is None:
+        origin_location = next((_location_key(move.location) for move in moves if _location_key(move.location)), None)
+
+    if origin_location:
+        origin_departures = [
+            move for move in departures if _location_key(move.location) == origin_location
+        ]
+        if origin_departures:
+            return origin_departures[-1]
+
     first_actual_load_index = next(
         (
             idx

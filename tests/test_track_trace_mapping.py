@@ -468,6 +468,68 @@ def test_plan_shipment_update_falls_back_to_latest_departure_when_load_port_is_m
     assert updates["ETD"].value.date().isoformat() == "2026-03-30"
 
 
+def test_plan_shipment_update_uses_first_origin_departure_cluster_for_etd() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-6",
+        task_name="Shipment 6",
+        shipping_line="one",
+        booking_no="BOOK-6",
+        container_no="CONT-6",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 5, 17, 17, 0, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 5, 16, 7, 0, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="LAZARO CARDENAS",
+                event_time=datetime(2026, 5, 14, 4, 0, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="NINGBO, ZHEJIANG",
+                event_time=datetime(2026, 4, 12, 20, 0, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="SHEKOU, GUANGDONG",
+                event_time=datetime(2026, 4, 3, 23, 40, 30, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHEKOU, GUANGDONG",
+                event_time=datetime(2026, 4, 4, 2, 0, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="JIANGMEN, GUANGDONG",
+                event_time=datetime(2026, 3, 27, 23, 31, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="JIANGMEN, GUANGDONG",
+                event_time=datetime(2026, 3, 27, 11, 58, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["ETD"].value.date().isoformat() == "2026-03-27"
+
+
 def test_format_port_local_time_preserves_carrier_clock_time() -> None:
     assert format_port_local_time("2026-03-27T19:16:00.000Z", None) == "2026-03-27 19:16"
     assert format_port_local_time("27/03/2026 19:16", None) == "2026-03-27 19:16"
