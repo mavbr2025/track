@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
+from shipment_sync.carriers.common import to_dcsa_movement_name
 from shipment_sync.date_utils import format_port_local_time
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 
@@ -534,3 +535,17 @@ def test_format_port_local_time_preserves_carrier_clock_time() -> None:
     assert format_port_local_time("2026-03-27T19:16:00.000Z", None) == "2026-03-27 19:16"
     assert format_port_local_time("27/03/2026 19:16", None) == "2026-03-27 19:16"
     assert format_port_local_time("2026-05-02", None) == "2026-05-02"
+
+
+def test_unloaded_event_maps_to_discharge_not_load() -> None:
+    assert (
+        to_dcsa_movement_name(fallback_name="Unloaded from Vessel at Port of Discharging")
+        == "Container Discharged (DISC)"
+    )
+
+
+def test_vessel_arrival_at_port_of_discharge_maps_to_arrival() -> None:
+    assert (
+        to_dcsa_movement_name(fallback_name="Vessel Arrival at Port of Discharge")
+        == "Transport Arrived (ARRI)"
+    )

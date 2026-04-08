@@ -267,14 +267,18 @@ def _guess_dcsa_label_from_text(name: str | None) -> str | None:
         return _DCSA_EQUIPMENT_LABELS["GTOT"]
     if "empty container returned from customer" in normalized:
         return _DCSA_EQUIPMENT_LABELS["GTIN"]
+    if "arrival at port of discharge" in normalized or normalized.startswith("vessel arrival"):
+        return _DCSA_TRANSPORT_LABELS["ARRI"]
+    if "departure from port of loading" in normalized or normalized.startswith("vessel departure"):
+        return _DCSA_TRANSPORT_LABELS["DEPA"]
     if "gate in" in normalized or "gated in" in normalized:
         return _DCSA_EQUIPMENT_LABELS["GTIN"]
     if "gate out" in normalized or "gated out" in normalized:
         return _DCSA_EQUIPMENT_LABELS["GTOT"]
-    if "load on board" in normalized or "loaded" in normalized:
-        return _DCSA_EQUIPMENT_LABELS["LOAD"]
-    if "discharge" in normalized or "unloaded" in normalized:
+    if "unloaded from vessel" in normalized or "discharge" in normalized or "unloaded" in normalized:
         return _DCSA_EQUIPMENT_LABELS["DISC"]
+    if "loaded on vessel" in normalized or "load on board" in normalized or "loaded" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["LOAD"]
     if "stuff" in normalized:
         return _DCSA_EQUIPMENT_LABELS["STUF"]
     if "strip" in normalized:
