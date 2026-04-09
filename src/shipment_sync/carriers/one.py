@@ -132,15 +132,19 @@ class OneAdapter(CarrierAdapter):
         booking_no = _safe_text(first_item.get("bookingNo"))
         container_no = _safe_text(first_item.get("containerNo"))
 
-        if eta_time is None:
-            if booking_no:
-                eta_from_voyage, eta_from_voyage_local = self._fetch_eta_from_voyage_list(booking_no)
-                if eta_from_voyage is not None:
-                    eta_time = eta_from_voyage
-                    eta_local_text = eta_from_voyage_local
-                    raw_source = f"one-edh-voyage:{self.edh_base_url}/vessel/track-and-trace/voyage-list"
+        voyage_legs = self._fetch_voyage_list(booking_no) if booking_no else []
+        if eta_time is None and voyage_legs:
+            eta_from_voyage, eta_from_voyage_local = _extract_eta_from_voyage_list_data(voyage_legs)
+            if eta_from_voyage is not None:
+                eta_time = eta_from_voyage
+                eta_local_text = eta_from_voyage_local
+                raw_source = f"one-edh-voyage:{self.edh_base_url}/vessel/track-and-trace/voyage-list"
 
         recent_moves = self._fetch_recent_moves(booking_no, container_no)
+        if not recent_moves and voyage_legs:
+            departure_move = _extract_departure_move_from_voyage_list_data(voyage_legs)
+            if departure_move is not None:
+                recent_moves = [departure_move]
         latest_move = recent_moves[0] if recent_moves else _latest_move_from_search_item(first_item)
 
         if self.eta_only_mode:
@@ -178,7 +182,7 @@ class OneAdapter(CarrierAdapter):
             movement_details=movement_details,
         )
 
-    def _fetch_eta_from_voyage_list(self, booking_no: str) -> tuple[datetime | None, str | None]:
+    def _fetch_voyage_list(self, booking_no: str) -> list[dict[str, Any]]:
         url = f"{self.edh_base_url}/vessel/track-and-trace/voyage-list"
         try:
             response = self.session.get(
@@ -189,30 +193,14 @@ class OneAdapter(CarrierAdapter):
             response.raise_for_status()
             payload = response.json()
         except Exception:
-            return None, None
+            return []
 
         if not isinstance(payload, dict):
-            return None, None
+            return []
         data = payload.get("data")
         if not isinstance(data, list) or not data:
-            return None, None
-
-        eta_candidates: list[tuple[datetime, str | None]] = []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            pod = item.get("pod")
-            if not isinstance(pod, dict):
-                continue
-            for key in ("arrivalDate", "berthingDate"):
-                eta_raw = _safe_text(pod.get(key))
-                eta_candidate = parse_event_time(eta_raw)
-                if eta_candidate is not None:
-                    eta_candidates.append((eta_candidate, eta_raw))
-
-        if not eta_candidates:
-            return None, None
-        return max(eta_candidates, key=lambda x: x[0])
+            return []
+        return [item for item in data if isinstance(item, dict)]
 
     def _fetch_recent_moves(self, booking_no: str | None, container_no: str | None) -> list[MovementEvent]:
         if not booking_no or not container_no:
@@ -341,6 +329,54 @@ def _extract_eta_from_search_item(item: dict[str, Any]) -> tuple[datetime | None
             return eta, eta_raw
 
     return None, None
+
+
+def _extract_eta_from_voyage_list_data(items: list[dict[str, Any]]) -> tuple[datetime | None, str | None]:
+    eta_candidates: list[tuple[datetime, str | None]] = []
+    for item in items:
+        pod = item.get("pod")
+        if not isinstance(pod, dict):
+            continue
+        for key in ("arrivalDate", "berthingDate"):
+            eta_raw = _safe_text(pod.get(key))
+            eta_candidate = parse_event_time(eta_raw)
+            if eta_candidate is not None:
+                eta_candidates.append((eta_candidate, eta_raw))
+
+    if not eta_candidates:
+        return None, None
+    return max(eta_candidates, key=lambda x: x[0])
+
+
+def _extract_departure_move_from_voyage_list_data(items: list[dict[str, Any]]) -> MovementEvent | None:
+    departure_candidates: list[tuple[datetime, str | None, str | None]] = []
+    for item in items:
+        pol = item.get("pol")
+        if not isinstance(pol, dict):
+            continue
+        departure_raw = _safe_text(pol.get("date"))
+        departure_time = parse_event_time(departure_raw)
+        if departure_time is None:
+            continue
+        departure_candidates.append(
+            (
+                departure_time,
+                departure_raw,
+                _safe_text(pol.get("locationName")),
+            )
+        )
+
+    if not departure_candidates:
+        return None
+
+    departure_time, departure_raw, location = min(departure_candidates, key=lambda x: x[0])
+    return MovementEvent(
+        name="Transport Departed (DEPA)",
+        location=location,
+        event_time=departure_time,
+        event_time_local_text=departure_raw,
+        event_state="estimated",
+    )
 
 
 def _extract_eta_from_cargo_events(

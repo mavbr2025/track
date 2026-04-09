@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
 from shipment_sync.carriers.common import to_dcsa_movement_name
+from shipment_sync.carriers.one import _extract_departure_move_from_voyage_list_data
 from shipment_sync.date_utils import format_port_local_time
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 
@@ -549,3 +550,37 @@ def test_vessel_arrival_at_port_of_discharge_maps_to_arrival() -> None:
         to_dcsa_movement_name(fallback_name="Vessel Arrival at Port of Discharge")
         == "Transport Arrived (ARRI)"
     )
+
+
+def test_one_booking_only_voyage_list_produces_first_leg_departure_move() -> None:
+    move = _extract_departure_move_from_voyage_list_data(
+        [
+            {
+                "pol": {
+                    "locationName": "HONG KONG, HONG KONG, CHINA",
+                    "date": "2026-04-19T19:30:00.000Z",
+                },
+                "pod": {
+                    "locationName": "MANZANILLO, MEXICO",
+                    "berthingDate": "2026-05-17T16:00:00.000Z",
+                },
+            },
+            {
+                "pol": {
+                    "locationName": "MANZANILLO, MEXICO",
+                    "date": "2026-05-20T00:00:00.000Z",
+                },
+                "pod": {
+                    "locationName": "PUERTO QUETZAL, GUATEMALA",
+                    "berthingDate": "2026-05-23T07:00:00.000Z",
+                },
+            },
+        ]
+    )
+
+    assert move is not None
+    assert move.name == "Transport Departed (DEPA)"
+    assert move.location == "HONG KONG, HONG KONG, CHINA"
+    assert move.event_time is not None
+    assert move.event_time.date().isoformat() == "2026-04-19"
+    assert move.event_state == "estimated"
