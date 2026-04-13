@@ -449,12 +449,17 @@ def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Setti
     if not ordered_moves:
         return updates
 
-    first_discharge_index = next(
-        (idx for idx, move in enumerate(ordered_moves) if _event_code_from_move(move) == "DISC"),
-        None,
+    destination_discharge_index = _find_destination_discharge_index(ordered_moves)
+    pre_discharge_moves = (
+        ordered_moves[:destination_discharge_index]
+        if destination_discharge_index is not None
+        else ordered_moves
     )
-    pre_discharge_moves = ordered_moves[:first_discharge_index] if first_discharge_index is not None else ordered_moves
-    post_discharge_moves = ordered_moves[first_discharge_index:] if first_discharge_index is not None else []
+    post_discharge_moves = (
+        ordered_moves[destination_discharge_index:]
+        if destination_discharge_index is not None
+        else []
+    )
 
     updates.extend(
         _build_move_field_updates(
@@ -524,6 +529,25 @@ def _build_move_field_updates(
             )
         )
     return updates
+
+
+def _find_destination_discharge_index(moves: list[MovementEvent]) -> int | None:
+    discharge_indices = [
+        idx for idx, move in enumerate(moves) if _event_code_from_move(move) == "DISC"
+    ]
+    if not discharge_indices:
+        return None
+
+    for idx in reversed(discharge_indices):
+        later_codes = {
+            _event_code_from_move(candidate)
+            for candidate in moves[idx + 1 :]
+            if candidate.event_time is not None
+        }
+        if later_codes.intersection({"LOAD", "DEPA", "ARRI"}):
+            continue
+        return idx
+    return None
 
 
 def _pick_etd_move(moves: list[MovementEvent]) -> MovementEvent | None:

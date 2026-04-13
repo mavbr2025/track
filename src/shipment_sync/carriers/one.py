@@ -231,7 +231,7 @@ class OneAdapter(CarrierAdapter):
             location = _safe_text(location_obj.get("locationName"))
             event_name = _safe_text(event.get("eventName")) or "Unknown move"
             local_time_text = _safe_text(event.get("eventLocalPortDate")) or _safe_text(event.get("eventDate"))
-            event_state = _normalize_event_state(_safe_text(event.get("trigger")))
+            event_state = _normalize_event_state(_one_trigger_text(event))
             moves.append(
                 MovementEvent(
                     name=to_dcsa_movement_name(event=event, fallback_name=event_name),
@@ -392,7 +392,7 @@ def _extract_eta_from_cargo_events(
             continue
 
         matrix_id = _safe_text(event.get("matrixId"))
-        trigger_type = _safe_text(event.get("trigger"))
+        trigger_type = _one_trigger_text(event)
         location_name = _safe_text(event.get("locationName"))
 
         if matrix_ids and (not matrix_id or matrix_id not in matrix_ids):
@@ -428,7 +428,7 @@ def _latest_move_from_search_item(item: dict[str, Any]) -> MovementEvent | None:
         location=location,
         event_time=parse_event_time(event_local_text),
         event_time_local_text=event_local_text,
-        event_state=_normalize_event_state(_safe_text(latest.get("trigger"))),
+        event_state=_normalize_event_state(_one_trigger_text(latest)),
     )
 
 
@@ -437,6 +437,10 @@ def _safe_text(value: Any) -> str | None:
         trimmed = value.strip()
         return trimmed or None
     return None
+
+
+def _one_trigger_text(event: dict[str, Any]) -> str | None:
+    return _safe_text(event.get("triggerType")) or _safe_text(event.get("trigger"))
 
 
 def _normalize_event_state(value: str | None) -> str | None:
