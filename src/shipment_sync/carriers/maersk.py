@@ -7,6 +7,7 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    extract_container_numbers,
     extract_event_state_hint,
     extract_eta_time,
     extract_first,
@@ -51,12 +52,14 @@ class MaerskAdapter(CarrierAdapter):
         reference, ref_type = _pick_reference(shipment)
         source_url = _build_maersk_tracking_url(reference)
         payload, source = self._fetch_payload(reference, ref_type)
+        discovered_containers = extract_container_numbers(payload)
         events = _extract_events(payload)
         payload_eta = extract_eta_time(payload)
         payload_eta_raw = _extract_eta_raw(payload)
 
         if events:
             status = _status_from_events(events, source, source_url=source_url)
+            status.discovered_containers = discovered_containers
             if not status.eta_time:
                 status.eta_time = payload_eta
             if not status.eta_local_text:
@@ -70,6 +73,7 @@ class MaerskAdapter(CarrierAdapter):
                 status_text=_eta_status_text(payload_eta),
                 eta_time=payload_eta,
                 eta_local_text=payload_eta_raw,
+                discovered_containers=discovered_containers,
                 raw_source=source,
                 source_url=source_url,
             )
@@ -95,6 +99,7 @@ class MaerskAdapter(CarrierAdapter):
             event_time=parse_event_time(event_time_raw),
             eta_time=payload_eta,
             eta_local_text=payload_eta_raw,
+            discovered_containers=discovered_containers,
             raw_source=source,
             source_url=source_url,
             movement_details=movement_details,

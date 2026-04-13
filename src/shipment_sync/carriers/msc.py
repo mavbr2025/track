@@ -7,7 +7,13 @@ import time
 from typing import Any
 
 from shipment_sync.carriers.base import CarrierAdapter
-from shipment_sync.carriers.common import extract_event_state_hint, extract_first, parse_event_time, to_dcsa_movement_name
+from shipment_sync.carriers.common import (
+    extract_container_numbers,
+    extract_event_state_hint,
+    extract_first,
+    parse_event_time,
+    to_dcsa_movement_name,
+)
 from shipment_sync.carriers.generic_line import GenericLineAdapter
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 from shipment_sync.playwright_runner import run_sync_playwright
@@ -273,6 +279,7 @@ def _status_from_payload(
 
     bill = _pick_bill(data)
     container = _pick_container(bill)
+    discovered_containers = extract_container_numbers(payload)
     events = _extract_events(container)
     recent_moves = _events_to_moves(events)
     latest_move = recent_moves[0] if recent_moves else None
@@ -289,6 +296,7 @@ def _status_from_payload(
             eta_local_text=eta_local_text,
             latest_move=latest_move,
             recent_moves=recent_moves,
+            discovered_containers=discovered_containers,
             raw_source=source,
             source_url=source_url,
         )
@@ -301,6 +309,7 @@ def _status_from_payload(
         eta_local_text=eta_local_text,
         latest_move=latest_move,
         recent_moves=recent_moves,
+        discovered_containers=discovered_containers,
         raw_source=source,
         source_url=source_url,
         movement_details=latest_move.name if latest_move else None,

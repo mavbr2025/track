@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    extract_container_numbers,
     extract_event_state_hint,
     extract_eta_time,
     extract_first,
@@ -150,6 +151,7 @@ class HapagLloydAdapter(CarrierAdapter):
         eta_time = extract_eta_time(payload)
         eta_local_text = _extract_eta_raw(payload)
         recent_moves = _extract_moves(payload)
+        discovered_containers = extract_container_numbers(payload)
 
         if self.eta_only_mode:
             return ShipmentStatus(
@@ -158,6 +160,7 @@ class HapagLloydAdapter(CarrierAdapter):
                 eta_local_text=eta_local_text,
                 latest_move=recent_moves[0] if recent_moves else None,
                 recent_moves=recent_moves,
+                discovered_containers=discovered_containers,
                 raw_source=source,
                 source_url=source_url,
             )
@@ -198,6 +201,7 @@ class HapagLloydAdapter(CarrierAdapter):
             eta_local_text=eta_local_text,
             latest_move=latest_move,
             recent_moves=recent_moves,
+            discovered_containers=discovered_containers,
             raw_source=source,
             source_url=source_url,
             movement_details=movement_details,
@@ -549,6 +553,7 @@ def _status_from_page(*, html: str, source_url: str, eta_only_mode: bool) -> Shi
     latest_move = recent_moves[-1] if recent_moves else None
     eta_time, eta_local_text = _derive_eta_from_page_moves(recent_moves)
     last_movement = _extract_page_last_movement(text)
+    discovered_containers = extract_container_numbers(text)
 
     status_text = (latest_move.name if latest_move else None) or last_movement or _eta_status_text(eta_time)
     location = latest_move.location if latest_move else None
@@ -562,6 +567,7 @@ def _status_from_page(*, html: str, source_url: str, eta_only_mode: bool) -> Shi
             eta_local_text=eta_local_text,
             latest_move=latest_move,
             recent_moves=recent_moves,
+            discovered_containers=discovered_containers,
             raw_source=f"hapag-playwright:{source_url}",
             source_url=source_url,
         )
@@ -574,6 +580,7 @@ def _status_from_page(*, html: str, source_url: str, eta_only_mode: bool) -> Shi
         eta_local_text=eta_local_text,
         latest_move=latest_move,
         recent_moves=recent_moves,
+        discovered_containers=discovered_containers,
         raw_source=f"hapag-playwright:{source_url}",
         source_url=source_url,
         movement_details=movement_details,

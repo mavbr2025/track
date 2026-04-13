@@ -9,6 +9,7 @@ from typing import Any
 
 import requests
 
+from .carriers.common import extract_container_numbers
 from .config import Settings
 from .date_utils import format_display_date, format_port_local_time
 from .models import (
@@ -286,6 +287,13 @@ class ClickUpClient:
                     label="Track & Trace snapshot",
                 )
             )
+        container_update = _build_container_field_update(
+            shipment=shipment,
+            status=status,
+            field_id=self.settings.cf_container_no,
+        )
+        if container_update is not None:
+            candidate_field_updates.append(container_update)
         candidate_field_updates.extend(_build_direct_event_field_updates(status=status, settings=self.settings))
         candidate_field_updates = _dedupe_field_updates(candidate_field_updates)
         changed_field_updates = [
@@ -495,6 +503,39 @@ def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Setti
     return updates
 
 
+def _build_container_field_update(
+    *,
+    shipment: ShipmentRef,
+    status: ShipmentStatus,
+    field_id: str | None,
+) -> ShipmentFieldWrite | None:
+    if not field_id or not status.discovered_containers:
+        return None
+
+    current_tokens = _container_tokens_from_value(shipment.container_no)
+    discovered_tokens = _container_tokens_from_value(status.discovered_containers)
+    if not discovered_tokens:
+        return None
+
+    merged_tokens = list(current_tokens)
+    current_set = set(current_tokens)
+    for token in discovered_tokens:
+        if token in current_set:
+            continue
+        merged_tokens.append(token)
+        current_set.add(token)
+
+    if merged_tokens == current_tokens:
+        return None
+
+    return ShipmentFieldWrite(
+        field_id=field_id,
+        value=", ".join(merged_tokens),
+        field_type="text",
+        label="Container",
+    )
+
+
 def _build_move_field_updates(
     *,
     moves: list[MovementEvent],
@@ -634,6 +675,16 @@ def _dedupe_field_updates(updates: list[ShipmentFieldWrite]) -> list[ShipmentFie
     for update in updates:
         deduped[update.field_id] = update
     return list(deduped.values())
+
+
+def _container_tokens_from_value(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return extract_container_numbers(value)
+    if isinstance(value, list):
+        return extract_container_numbers(value)
+    return extract_container_numbers(str(value))
 
 
 def _field_value_changed(update: ShipmentFieldWrite, current_value: Any) -> bool:

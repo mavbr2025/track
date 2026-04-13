@@ -11,7 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from shipment_sync.carriers.base import CarrierAdapter
-from shipment_sync.carriers.common import parse_event_time
+from shipment_sync.carriers.common import extract_container_numbers, parse_event_time
 from shipment_sync.carriers.generic_line import GenericLineAdapter
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 from shipment_sync.playwright_runner import run_sync_playwright
@@ -132,8 +132,10 @@ class WanHaiAdapter(CarrierAdapter):
                     result_data = _parse_result_page(result_html, cargo_type=cargo_type)
                     if result_data is None:
                         raise ValueError(f"Wan Hai returned no results for reference {reference}")
+                    discovered_containers = extract_container_numbers(result_html)
 
                     detail = None
+                    detail_html = ""
                     booking_reference = result_data.get("booking_reference")
                     if booking_reference:
                         try:
@@ -143,7 +145,9 @@ class WanHaiAdapter(CarrierAdapter):
                             detail_page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
                             if self.playwright_request_delay_seconds > 0:
                                 detail_page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
-                            detail = _parse_booking_detail_page(detail_page.content())
+                            detail_html = detail_page.content()
+                            detail = _parse_booking_detail_page(detail_html)
+                            discovered_containers = extract_container_numbers([discovered_containers, detail_html, detail])
                         except Exception:
                             detail = None
 
@@ -151,6 +155,7 @@ class WanHaiAdapter(CarrierAdapter):
                         cargo_type=cargo_type,
                         result=result_data,
                         detail=detail,
+                        discovered_containers=discovered_containers,
                         source_url=results_page.url,
                     )
                 finally:
@@ -260,6 +265,7 @@ def _status_from_parsed(
     cargo_type: str,
     result: dict[str, str],
     detail: dict[str, str] | None,
+    discovered_containers: list[str],
     source_url: str,
 ) -> ShipmentStatus:
     detail = detail or {}
@@ -306,6 +312,7 @@ def _status_from_parsed(
         eta_local_text=eta_local_text,
         latest_move=latest_move,
         recent_moves=[latest_move] if latest_move is not None else [],
+        discovered_containers=discovered_containers,
         raw_source=f"wan_hai-playwright:{source_url}",
         source_url=source_url,
         movement_details=movement_details or None,

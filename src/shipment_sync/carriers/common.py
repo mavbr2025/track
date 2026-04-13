@@ -142,6 +142,42 @@ def extract_event_state_hint(event: dict[str, Any], extra_keys: list[str] | None
     return extract_first(event, candidate_keys)
 
 
+def extract_container_numbers(payload: Any) -> list[str]:
+    pattern = re.compile(r"\b([A-Za-z]{4}\d{7})\b")
+    queue = [payload]
+    seen_objects: set[int] = set()
+    found: list[str] = []
+    seen_tokens: set[str] = set()
+
+    while queue:
+        item = queue.pop(0)
+        item_id = id(item)
+        if item_id in seen_objects:
+            continue
+        seen_objects.add(item_id)
+
+        if isinstance(item, dict):
+            queue.extend(item.values())
+            continue
+        if isinstance(item, list):
+            queue.extend(item)
+            continue
+        if isinstance(item, tuple):
+            queue.extend(item)
+            continue
+        if not isinstance(item, str):
+            continue
+
+        for match in pattern.findall(item):
+            token = match.upper()
+            if token in seen_tokens:
+                continue
+            seen_tokens.add(token)
+            found.append(token)
+
+    return found
+
+
 def parse_event_time(value: str | None) -> datetime | None:
     if not value:
         return None

@@ -9,6 +9,7 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    extract_container_numbers,
     extract_event_state_hint,
     extract_eta_time,
     extract_first,
@@ -49,6 +50,7 @@ class OneAdapter(CarrierAdapter):
                 return edh_status
 
         payload, source = self._fetch_payload(reference, ref_type_code)
+        discovered_containers = extract_container_numbers(payload)
         eta_time = extract_eta_time(payload)
         eta_local_text = _extract_eta_raw(payload)
 
@@ -57,6 +59,7 @@ class OneAdapter(CarrierAdapter):
                 status_text=_eta_status_text(eta_time),
                 eta_time=eta_time,
                 eta_local_text=eta_local_text,
+                discovered_containers=discovered_containers,
                 raw_source=source,
                 source_url=source_url,
             )
@@ -92,6 +95,7 @@ class OneAdapter(CarrierAdapter):
             event_time=parse_event_time(event_time_raw),
             eta_time=eta_time,
             eta_local_text=eta_local_text,
+            discovered_containers=discovered_containers,
             raw_source=source,
             source_url=source_url,
             movement_details=movement_details,
@@ -127,6 +131,7 @@ class OneAdapter(CarrierAdapter):
         first_item = data[0] if isinstance(data[0], dict) else None
         if not first_item:
             return None
+        discovered_containers = extract_container_numbers(search_result)
 
         eta_time, eta_local_text = _extract_eta_from_search_item(first_item)
         raw_source = f"one-edh-search:{search_url}"
@@ -155,6 +160,7 @@ class OneAdapter(CarrierAdapter):
                 eta_local_text=eta_local_text,
                 latest_move=latest_move,
                 recent_moves=recent_moves,
+                discovered_containers=discovered_containers,
                 raw_source=raw_source,
                 source_url=source_url,
             )
@@ -178,6 +184,7 @@ class OneAdapter(CarrierAdapter):
             eta_local_text=eta_local_text,
             latest_move=latest_move,
             recent_moves=recent_moves,
+            discovered_containers=discovered_containers,
             raw_source=raw_source,
             source_url=source_url,
             movement_details=movement_details,

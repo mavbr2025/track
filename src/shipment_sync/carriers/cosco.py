@@ -16,6 +16,7 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    extract_container_numbers,
     extract_eta_time,
     extract_event_state_hint,
     extract_first,
@@ -408,6 +409,7 @@ def _build_status_from_payload(
         normalized_payload,
         ["eventDescription", "milestoneName", "nodeName", "transportStatus", "cargoStatus", "eventType"],
     )
+    discovered_containers = extract_container_numbers(normalized_payload)
 
     if not any([recent_moves, eta_time, eta_local_text, location, movement_details, status_hint]):
         return None
@@ -420,6 +422,7 @@ def _build_status_from_payload(
         eta_local_text=eta_local_text,
         latest_move=latest_move,
         recent_moves=recent_moves,
+        discovered_containers=discovered_containers,
         raw_source=source,
         source_url=source_url,
         movement_details=movement_details,

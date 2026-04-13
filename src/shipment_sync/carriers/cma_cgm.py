@@ -11,6 +11,7 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    extract_container_numbers,
     extract_event_state_hint,
     extract_eta_time,
     extract_first,
@@ -67,6 +68,7 @@ class CmaCgmAdapter(CarrierAdapter):
         )
         source_url = _build_source_url(self.url_template, reference, ref_type)
         payload, source = self._fetch_payload(reference=reference, ref_type=ref_type)
+        discovered_containers = extract_container_numbers(payload)
         recent_moves = _extract_moves(payload)
         latest_move = recent_moves[0] if recent_moves else None
         eta_time = extract_eta_time(payload)
@@ -84,6 +86,7 @@ class CmaCgmAdapter(CarrierAdapter):
                 eta_local_text=eta_local_text,
                 latest_move=latest_move,
                 recent_moves=recent_moves,
+                discovered_containers=discovered_containers,
                 raw_source=source,
                 source_url=source_url,
             )
@@ -113,6 +116,7 @@ class CmaCgmAdapter(CarrierAdapter):
             eta_local_text=eta_local_text,
             latest_move=latest_move,
             recent_moves=recent_moves,
+            discovered_containers=discovered_containers,
             raw_source=source,
             source_url=source_url,
             movement_details=movement_details,
