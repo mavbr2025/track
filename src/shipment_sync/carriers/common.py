@@ -110,6 +110,38 @@ def extract_first(payload: Any, candidate_keys: list[str]) -> str | None:
     return None
 
 
+def extract_event_state_hint(event: dict[str, Any], extra_keys: list[str] | None = None) -> str | None:
+    actual_flag = _extract_first_bool(
+        event,
+        ["actualIndicator", "isActual", "actual", "hasOccurred", "isConfirmed"],
+    )
+    if actual_flag is True:
+        return "actual"
+
+    estimated_flag = _extract_first_bool(
+        event,
+        ["estimatedIndicator", "isEstimated", "estimated", "isPlanned"],
+    )
+    if estimated_flag is True:
+        return "estimated"
+
+    candidate_keys = [
+        "triggerType",
+        "eventClassifierCode",
+        "trigger",
+        "eventType",
+        "status",
+        "state",
+        "eventStatus",
+        "eventState",
+        "milestoneStatus",
+        "shipmentStatus",
+    ]
+    if extra_keys:
+        candidate_keys.extend(extra_keys)
+    return extract_first(event, candidate_keys)
+
+
 def parse_event_time(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -163,6 +195,37 @@ def extract_eta_time(payload: Any) -> datetime | None:
         ],
     )
     return parse_event_time(eta_raw)
+
+
+def _extract_first_bool(payload: Any, candidate_keys: list[str]) -> bool | None:
+    wanted = {k.lower() for k in candidate_keys}
+    queue = [payload]
+    while queue:
+        item = queue.pop(0)
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if key.lower() in wanted:
+                    parsed = _coerce_bool(value)
+                    if parsed is not None:
+                        return parsed
+                queue.append(value)
+        elif isinstance(item, list):
+            queue.extend(item)
+    return None
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on", "actual", "act", "confirmed", "complete", "completed", "a"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", "estimated", "estimate", "est", "planned", "plan", "expected", "scheduled", "e"}:
+            return False
+    return None
 
 
 def _parse_datetime_fallback(candidate: str) -> datetime | None:

@@ -15,7 +15,13 @@ import uuid
 import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
-from shipment_sync.carriers.common import extract_eta_time, extract_first, parse_event_time, to_dcsa_movement_name
+from shipment_sync.carriers.common import (
+    extract_eta_time,
+    extract_event_state_hint,
+    extract_first,
+    parse_event_time,
+    to_dcsa_movement_name,
+)
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 
 
@@ -469,10 +475,7 @@ def _extract_moves(payload: dict[str, Any]) -> list[MovementEvent]:
                 "expectedDateOfDeparture",
             ],
         )
-        state_hint = extract_first(
-            event,
-            ["eventClassifierCode", "trigger", "eventType", "status", "actualIndicator", "estimatedIndicator", "label"],
-        )
+        state_hint = extract_event_state_hint(event, extra_keys=["label"])
         raw_name = extract_first(
             event,
             [

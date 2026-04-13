@@ -11,6 +11,7 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    extract_event_state_hint,
     extract_eta_time,
     extract_first,
     extract_json_from_http_response,
@@ -276,7 +277,7 @@ def _extract_moves(payload: dict[str, Any]) -> list[MovementEvent]:
                 "date",
             ],
         )
-        state_hint = extract_first(event, ["eventClassifierCode", "trigger", "eventType", "status"])
+        state_hint = extract_event_state_hint(event)
         move_name = _extract_move_name(event)
         moves.append(
             MovementEvent(

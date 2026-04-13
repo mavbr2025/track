@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from shipment_sync.carriers.base import CarrierAdapter
-from shipment_sync.carriers.common import extract_first, parse_event_time, to_dcsa_movement_name
+from shipment_sync.carriers.common import extract_event_state_hint, extract_first, parse_event_time, to_dcsa_movement_name
 from shipment_sync.carriers.generic_line import GenericLineAdapter
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 from shipment_sync.playwright_runner import run_sync_playwright
@@ -343,7 +343,7 @@ def _events_to_moves(events: list[dict[str, Any]]) -> list[MovementEvent]:
 
         local_time_text = extract_first(event, ["Date", "EventDate", "eventDateTime", "date"])
         location = extract_first(event, ["Location", "location", "LocationName", "locationName", "Port", "port"])
-        state_hint = extract_first(event, ["eventClassifierCode", "trigger", "eventType", "status", "Detail"])
+        state_hint = extract_event_state_hint(event, extra_keys=["Detail"])
 
         moves.append(
             MovementEvent(
