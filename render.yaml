@@ -21,6 +21,36 @@ services:
         value: "0"
       - key: CLICKUP_DISCOVER_LISTS_FROM_SPACES
         value: "true"
+      - key: MAERSK_API_MODE
+        value: events
+      - key: MAERSK_TRACKING_API_URL
+        value: https://api.maersk.com/track-and-trace-private/events
+      - key: MAERSK_TRACKING_URL_TEMPLATE
+        value: ""
+      - key: MAERSK_CONSUMER_KEY
+        sync: false
+      - key: MAERSK_OAUTH_TOKEN_URL
+        value: https://api.maersk.com/oauth2/access_token
+      - key: MAERSK_OAUTH_CLIENT_ID
+        sync: false
+      - key: MAERSK_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: MAERSK_OAUTH_SCOPE
+        value: ""
+      - key: MAERSK_API_VERSION
+        value: "1"
+      - key: MAERSK_EVENTS_LIMIT
+        value: "100"
+      - key: MAERSK_FETCH_ALL_EVENTS
+        value: "true"
+      - key: MAERSK_WEB_FALLBACK_ON_API_ERROR
+        value: "false"
+      - key: MAERSK_TIMEOUT_SECONDS
+        value: "60"
+      - key: MAERSK_MAX_RETRIES
+        value: "2"
+      - key: MAERSK_RETRY_DELAY_SECONDS
+        value: "2"
       - key: MSC_USE_PLAYWRIGHT
         value: "true"
       - key: MSC_PLAYWRIGHT_REQUIRED
@@ -77,6 +107,36 @@ services:
         value: "0"
       - key: CLICKUP_DISCOVER_LISTS_FROM_SPACES
         value: "true"
+      - key: MAERSK_API_MODE
+        value: events
+      - key: MAERSK_TRACKING_API_URL
+        value: https://api.maersk.com/track-and-trace-private/events
+      - key: MAERSK_TRACKING_URL_TEMPLATE
+        value: ""
+      - key: MAERSK_CONSUMER_KEY
+        sync: false
+      - key: MAERSK_OAUTH_TOKEN_URL
+        value: https://api.maersk.com/oauth2/access_token
+      - key: MAERSK_OAUTH_CLIENT_ID
+        sync: false
+      - key: MAERSK_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: MAERSK_OAUTH_SCOPE
+        value: ""
+      - key: MAERSK_API_VERSION
+        value: "1"
+      - key: MAERSK_EVENTS_LIMIT
+        value: "100"
+      - key: MAERSK_FETCH_ALL_EVENTS
+        value: "true"
+      - key: MAERSK_WEB_FALLBACK_ON_API_ERROR
+        value: "false"
+      - key: MAERSK_TIMEOUT_SECONDS
+        value: "60"
+      - key: MAERSK_MAX_RETRIES
+        value: "2"
+      - key: MAERSK_RETRY_DELAY_SECONDS
+        value: "2"
       - key: MSC_USE_PLAYWRIGHT
         value: "true"
       - key: MSC_PLAYWRIGHT_REQUIRED
