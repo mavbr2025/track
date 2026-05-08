@@ -20,11 +20,39 @@ from shipment_sync.carriers.common import (
     to_dcsa_movement_name,
 )
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
+from shipment_sync.playwright_runner import run_sync_playwright
 
 
 class CmaCgmAdapter(CarrierAdapter):
     def __init__(self) -> None:
         self.eta_only_mode = _env_bool("SHIPMENT_ETA_ONLY", default=True)
+        self.use_playwright = _env_bool("CMA_CGM_USE_PLAYWRIGHT", default=False)
+        self.playwright_required = _env_bool("CMA_CGM_PLAYWRIGHT_REQUIRED", default=False)
+        self.playwright_headless = _env_bool("CMA_CGM_PLAYWRIGHT_HEADLESS", default=True)
+        self.playwright_timeout_seconds = int(os.getenv("CMA_CGM_PLAYWRIGHT_TIMEOUT_SECONDS", "90"))
+        self.playwright_wait_seconds = float(os.getenv("CMA_CGM_PLAYWRIGHT_WAIT_SECONDS", "8"))
+        self.playwright_browser = os.getenv("CMA_CGM_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
+        self.playwright_channel = os.getenv("CMA_CGM_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
+        self.playwright_locale = os.getenv("CMA_CGM_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
+        self.playwright_warmup_url = (
+            os.getenv("CMA_CGM_PLAYWRIGHT_WARMUP_URL", "https://www.cma-cgm.com/ebusiness/tracking").strip()
+            or "https://www.cma-cgm.com/ebusiness/tracking"
+        )
+        self.playwright_user_agent = (
+            os.getenv(
+                "CMA_CGM_PLAYWRIGHT_USER_AGENT",
+                (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+            ).strip()
+            or (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+        )
         self.url_template = os.getenv(
             "CMA_CGM_TRACKING_URL_TEMPLATE",
             "https://www.cma-cgm.com/ebusiness/tracking/detail/{reference}",
@@ -67,6 +95,15 @@ class CmaCgmAdapter(CarrierAdapter):
             container_code=self.container_type_code,
         )
         source_url = _build_source_url(self.url_template, reference, ref_type)
+        playwright_error: Exception | None = None
+        if self.use_playwright:
+            try:
+                return self._fetch_status_playwright(reference=reference, ref_type=ref_type, source_url=source_url)
+            except Exception as exc:
+                playwright_error = exc
+                if self.playwright_required:
+                    raise
+
         payload, source = self._fetch_payload(reference=reference, ref_type=ref_type)
         discovered_containers = extract_container_numbers(payload)
         recent_moves = _extract_moves(payload)
@@ -87,7 +124,7 @@ class CmaCgmAdapter(CarrierAdapter):
                 latest_move=latest_move,
                 recent_moves=recent_moves,
                 discovered_containers=discovered_containers,
-                raw_source=source,
+                raw_source=_append_raw_source(source, f"cma-playwright-error:{playwright_error}") if playwright_error else source,
                 source_url=source_url,
             )
 
@@ -117,10 +154,79 @@ class CmaCgmAdapter(CarrierAdapter):
             latest_move=latest_move,
             recent_moves=recent_moves,
             discovered_containers=discovered_containers,
-            raw_source=source,
+            raw_source=_append_raw_source(source, f"cma-playwright-error:{playwright_error}") if playwright_error else source,
             source_url=source_url,
             movement_details=movement_details,
         )
+
+    def _fetch_status_playwright(self, *, reference: str, ref_type: str, source_url: str) -> ShipmentStatus:
+        def _run() -> ShipmentStatus:
+            try:
+                from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+                from playwright.sync_api import sync_playwright
+            except Exception as exc:
+                raise ValueError("Playwright is not installed. Run: pip install -e .[browser] && playwright install") from exc
+
+            timeout_ms = max(1, self.playwright_timeout_seconds) * 1000
+            wait_ms = max(0, int(self.playwright_wait_seconds * 1000))
+            with sync_playwright() as p:
+                browser_type = getattr(p, self.playwright_browser, None)
+                if browser_type is None:
+                    raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
+
+                launch_kwargs: dict[str, Any] = {
+                    "headless": self.playwright_headless,
+                    "args": ["--disable-blink-features=AutomationControlled"],
+                }
+                if self.playwright_channel and self.playwright_browser == "chromium":
+                    launch_kwargs["channel"] = self.playwright_channel
+
+                browser = browser_type.launch(**launch_kwargs)
+                try:
+                    context = browser.new_context(
+                        user_agent=self.playwright_user_agent,
+                        locale=self.playwright_locale,
+                        viewport={"width": 1440, "height": 1000},
+                    )
+                    context.set_extra_http_headers(
+                        {
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.9",
+                        }
+                    )
+                    context.add_init_script(_STEALTH_INIT_SCRIPT)
+                    page = context.new_page()
+                    page.goto(self.playwright_warmup_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    if wait_ms:
+                        page.wait_for_timeout(min(wait_ms, 6000))
+                    page.goto(source_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    if wait_ms:
+                        page.wait_for_timeout(wait_ms)
+
+                    try:
+                        page.get_by_text("Display Previous Moves", exact=False).first.click(timeout=3000)
+                        if wait_ms:
+                            page.wait_for_timeout(min(wait_ms, 4000))
+                    except PlaywrightTimeoutError:
+                        pass
+                    except Exception:
+                        pass
+
+                    body_text = page.locator("body").inner_text(timeout=timeout_ms)
+                    html = page.content()
+                    combined_page = f"{body_text}\n{html}"
+                    if "tracking details" not in body_text.lower() and _is_challenge_page(combined_page):
+                        raise ValueError("CMA-CGM page blocked by anti-bot challenge")
+                    return _status_from_playwright_text(
+                        body_text,
+                        reference=reference,
+                        source_url=source_url,
+                        raw_source=f"cma-playwright:{source_url}",
+                    )
+                finally:
+                    browser.close()
+
+        return run_sync_playwright(_run)
 
     def _fetch_payload(self, *, reference: str, ref_type: str) -> tuple[dict[str, Any], str]:
         headers = {self.api_key_header: self.api_key} if self.api_key else {}
@@ -260,6 +366,192 @@ def _normalize_reference(reference: str) -> str:
         if re.match(r"^[A-Za-z]{4}\d{7}$", token):
             return token
     return tokens[0]
+
+
+def _status_from_playwright_text(
+    text: str,
+    *,
+    reference: str,
+    source_url: str,
+    raw_source: str,
+) -> ShipmentStatus:
+    if not text or "tracking details" not in text.lower():
+        snippet = (text or "").strip().replace("\n", " ")[:240]
+        raise ValueError(f"CMA-CGM tracking detail page did not contain tracking details: {snippet}")
+
+    recent_moves = _extract_playwright_moves(text)
+    latest_move = recent_moves[0] if recent_moves else None
+    eta_time, eta_local_text = _extract_playwright_eta(text, recent_moves)
+    status_text = _extract_playwright_status_text(text) or (latest_move.name if latest_move else None) or _eta_status_text(eta_time)
+    containers = extract_container_numbers(text)
+    if re.match(r"^[A-Za-z]{4}\d{7}$", reference) and reference not in containers:
+        containers.insert(0, reference)
+
+    return ShipmentStatus(
+        status_text=status_text,
+        location=latest_move.location if latest_move else None,
+        event_time=latest_move.event_time if latest_move else None,
+        eta_time=eta_time,
+        eta_local_text=eta_local_text,
+        latest_move=latest_move,
+        recent_moves=recent_moves,
+        discovered_containers=list(dict.fromkeys(containers)),
+        raw_source=raw_source,
+        source_url=source_url,
+        movement_details=latest_move.name if latest_move else None,
+    )
+
+
+def _extract_playwright_status_text(text: str) -> str | None:
+    lines = _clean_text_lines(text)
+    for idx, line in enumerate(lines):
+        if line.lower() == "tracking details":
+            for candidate in lines[idx + 1 : idx + 8]:
+                if candidate.lower() in {"shipment status", "container", "origin", "destination"}:
+                    continue
+                if re.match(r"^[A-Z][A-Z\s/-]{2,}$", candidate):
+                    return candidate
+    return None
+
+
+def _extract_playwright_eta(text: str, moves: list[MovementEvent]) -> tuple[datetime | None, str | None]:
+    lines = _clean_text_lines(text)
+    for idx, line in enumerate(lines):
+        if line.lower() == "arrived at pod" and idx + 2 < len(lines):
+            parsed, local_text = _parse_cma_datetime(lines[idx + 1], lines[idx + 2])
+            if parsed:
+                return parsed, local_text
+
+    pod_candidates = [
+        move
+        for move in moves
+        if move.event_time is not None
+        and (
+            "Transport Arrived" in move.name
+            or "Container Discharged" in move.name
+        )
+    ]
+    if pod_candidates:
+        best = max(pod_candidates, key=lambda move: move.event_time or datetime.min.replace(tzinfo=timezone.utc))
+        return best.event_time, best.event_time_local_text
+    return None, None
+
+
+def _extract_playwright_moves(text: str) -> list[MovementEvent]:
+    lines = _clean_text_lines(text)
+    moves: list[MovementEvent] = []
+    idx = 0
+    while idx < len(lines):
+        date_line = lines[idx]
+        if not _is_cma_date_line(date_line):
+            idx += 1
+            continue
+        if idx + 3 >= len(lines):
+            break
+
+        time_line = lines[idx + 1]
+        move_label = lines[idx + 2]
+        location = lines[idx + 3]
+        if not _is_cma_time_line(time_line) or _is_cma_date_line(move_label):
+            idx += 1
+            continue
+
+        parsed_time, local_text = _parse_cma_datetime(date_line, time_line)
+        moves.append(
+            MovementEvent(
+                name=_cma_move_to_dcsa_name(move_label),
+                location=location,
+                event_time=parsed_time,
+                event_time_local_text=local_text,
+                event_state="actual",
+            )
+        )
+        idx += 4
+        if idx < len(lines) and _looks_like_vessel_line(lines[idx]):
+            idx += 1
+
+    return sorted(
+        moves,
+        key=lambda move: (move.event_time is not None, move.event_time.isoformat() if move.event_time else ""),
+        reverse=True,
+    )
+
+
+def _clean_text_lines(text: str) -> list[str]:
+    ignored = {
+        "accessible text",
+        "display previous moves",
+        "display more movements",
+        "show more",
+    }
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        if line.lower() in ignored:
+            continue
+        lines.append(line)
+    return lines
+
+
+def _is_cma_date_line(value: str) -> bool:
+    return bool(re.match(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-[A-Z]{3}-\d{4}$", value))
+
+
+def _is_cma_time_line(value: str) -> bool:
+    return bool(re.match(r"^\d{1,2}:\d{2}\s*(AM|PM)$", value, flags=re.IGNORECASE))
+
+
+def _parse_cma_datetime(date_line: str, time_line: str) -> tuple[datetime | None, str | None]:
+    cleaned = f"{date_line} {time_line}".replace(".", "").strip()
+    for fmt in ("%A, %d-%b-%Y %I:%M %p", "%a, %d-%b-%Y %I:%M %p"):
+        try:
+            parsed = datetime.strptime(cleaned.title(), fmt).replace(tzinfo=timezone.utc)
+            return parsed, parsed.strftime("%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            continue
+    return None, None
+
+
+def _looks_like_vessel_line(value: str) -> bool:
+    upper = value.upper()
+    if _is_cma_date_line(value):
+        return False
+    if upper in _CMA_MOVE_LABELS:
+        return False
+    return bool(re.search(r"\([A-Z0-9]+\)", value))
+
+
+def _cma_move_to_dcsa_name(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", value).strip().upper()
+    if normalized == "EMPTY TO SHIPPER":
+        return "Container Gated Out (GTOT)"
+    if normalized == "LOADED ON BOARD":
+        return "Container Loaded (LOAD)"
+    if normalized == "VESSEL DEPARTURE":
+        return "Transport Departed (DEPA)"
+    if normalized == "VESSEL ARRIVAL":
+        return "Transport Arrived (ARRI)"
+    if normalized in {"DISCHARGED", "DISCHARGED IN TRANSHIPMENT"}:
+        return "Container Discharged (DISC)"
+    if normalized == "CONTAINER TO CONSIGNEE":
+        return "Container Gated Out (GTOT)"
+    if normalized == "EMPTY IN DEPOT":
+        return "Container Gated In (GTIN)"
+    return to_dcsa_movement_name(event={}, fallback_name=value)
+
+
+_CMA_MOVE_LABELS = {
+    "EMPTY TO SHIPPER",
+    "LOADED ON BOARD",
+    "VESSEL DEPARTURE",
+    "VESSEL ARRIVAL",
+    "DISCHARGED",
+    "DISCHARGED IN TRANSHIPMENT",
+    "CONTAINER TO CONSIGNEE",
+    "EMPTY IN DEPOT",
+}
 
 
 def _extract_moves(payload: dict[str, Any]) -> list[MovementEvent]:
@@ -473,6 +765,8 @@ def _is_challenge_page(body: str) -> bool:
     return (
         "please enable js and disable any ad blocker" in normalized
         or "captcha" in normalized
+        or "datadome" in normalized
+        or "access is temporarily restricted" in normalized
         or "access denied" in normalized
         or "<title>cma-cgm.com</title>" in normalized
     )
@@ -494,3 +788,17 @@ def _method_name_to_path(method_name: str) -> str:
     if normalized == "getmoveoncommercialcycle":
         return "/events/{reference}"
     return method_name
+
+
+def _append_raw_source(raw_source: str | None, addition: str) -> str:
+    if not raw_source:
+        return addition
+    return f"{raw_source}; {addition}"
+
+
+_STEALTH_INIT_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+window.chrome = window.chrome || { runtime: {} };
+"""

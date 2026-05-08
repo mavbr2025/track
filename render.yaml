@@ -89,6 +89,20 @@ services:
         value: "chrome"
       - key: WAN_HAI_PLAYWRIGHT_HEADLESS
         value: "true"
+      - key: CMA_CGM_USE_PLAYWRIGHT
+        value: "true"
+      - key: CMA_CGM_PLAYWRIGHT_REQUIRED
+        value: "true"
+      - key: CMA_CGM_PLAYWRIGHT_BROWSER
+        value: "chromium"
+      - key: CMA_CGM_PLAYWRIGHT_CHANNEL
+        value: "chrome"
+      - key: CMA_CGM_PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: CMA_CGM_PLAYWRIGHT_WARMUP_URL
+        value: https://www.cma-cgm.com/ebusiness/tracking
+      - key: CMA_CGM_PLAYWRIGHT_WAIT_SECONDS
+        value: "8"
 
   - type: cron
     name: track-trace-cron
@@ -175,3 +189,17 @@ services:
         value: "chrome"
       - key: WAN_HAI_PLAYWRIGHT_HEADLESS
         value: "true"
+      - key: CMA_CGM_USE_PLAYWRIGHT
+        value: "true"
+      - key: CMA_CGM_PLAYWRIGHT_REQUIRED
+        value: "true"
+      - key: CMA_CGM_PLAYWRIGHT_BROWSER
+        value: "chromium"
+      - key: CMA_CGM_PLAYWRIGHT_CHANNEL
+        value: "chrome"
+      - key: CMA_CGM_PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: CMA_CGM_PLAYWRIGHT_WARMUP_URL
+        value: https://www.cma-cgm.com/ebusiness/tracking
+      - key: CMA_CGM_PLAYWRIGHT_WAIT_SECONDS
+        value: "8"
