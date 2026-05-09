@@ -329,15 +329,21 @@ def get_with_retries(
     timeout_seconds: int = 45,
     max_retries: int = 2,
     retry_delay_seconds: float = 2.0,
+    non_retry_statuses: set[int] | None = None,
 ) -> requests.Response:
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
             response = session.get(url, params=params, headers=headers, timeout=timeout_seconds)
+            if non_retry_statuses and response.status_code in non_retry_statuses:
+                response.raise_for_status()
             response.raise_for_status()
             return response
         except requests.RequestException as exc:
             last_error = exc
+            response = getattr(exc, "response", None)
+            if response is not None and non_retry_statuses and response.status_code in non_retry_statuses:
+                break
             if attempt >= max_retries:
                 break
             time.sleep(retry_delay_seconds * (attempt + 1))

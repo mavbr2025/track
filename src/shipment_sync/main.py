@@ -165,9 +165,15 @@ def _preview_updates(client: ClickUpClient, shipments: list[ShipmentRef]) -> Non
             )
             continue
 
-        status = adapter.fetch_status(shipment)
-        plan = client.plan_shipment_update(shipment, status)
-        _print_preview_plan(shipment, plan)
+        try:
+            status = adapter.fetch_status(shipment)
+            plan = client.plan_shipment_update(shipment, status)
+            _print_preview_plan(shipment, plan)
+        except Exception as exc:
+            print(
+                f"- {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
+                f"skipped: {exc}"
+            )
 
 
 def _print_preview_plan(shipment: ShipmentRef, plan: ShipmentUpdatePlan) -> None:

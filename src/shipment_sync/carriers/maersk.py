@@ -143,6 +143,7 @@ class MaerskAdapter(CarrierAdapter):
                     timeout_seconds=self.timeout_seconds,
                     max_retries=self.max_retries,
                     retry_delay_seconds=self.retry_delay_seconds,
+                    non_retry_statuses={401, 403, 404},
                 )
                 payload = response.json()
                 if isinstance(payload, list):
@@ -150,6 +151,15 @@ class MaerskAdapter(CarrierAdapter):
                 if isinstance(payload, dict):
                     return payload, f"maersk-events-api:{self.api_url}"
                 return {"events": []}, f"maersk-events-api:{self.api_url}"
+            except requests.HTTPError as exc:
+                if _http_status(exc) == 404:
+                    return {"events": []}, f"maersk-events-api:not-found:{self.api_url}"
+                if not _should_try_web_fallback(exc):
+                    raise
+                fallback_payload, fallback_source = self._try_web_fallback(reference, ref_type, reason="events_api_error")
+                if fallback_payload is not None:
+                    return fallback_payload, fallback_source
+                raise
             except requests.RequestException:
                 fallback_payload, fallback_source = self._try_web_fallback(reference, ref_type, reason="events_api_error")
                 if fallback_payload is not None:
@@ -206,6 +216,7 @@ class MaerskAdapter(CarrierAdapter):
                 timeout_seconds=self.timeout_seconds,
                 max_retries=self.max_retries,
                 retry_delay_seconds=self.retry_delay_seconds,
+                non_retry_statuses={401, 403, 404},
             )
             payload = response.json()
             event_batch = _extract_events(payload if isinstance(payload, dict) else {"events": payload})
@@ -525,6 +536,20 @@ def _increment_cursor(cursor: str) -> str | None:
         return str(int(cursor) + 1)
     except Exception:
         return None
+
+
+def _http_status(exc: requests.HTTPError) -> int | None:
+    response = exc.response
+    if response is None:
+        return None
+    return response.status_code
+
+
+def _should_try_web_fallback(exc: requests.HTTPError) -> bool:
+    status = _http_status(exc)
+    if status is None:
+        return True
+    return status >= 500
 
 
 def _normalize_event_state(value: str | None) -> str | None:

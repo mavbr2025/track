@@ -1,0 +1,23 @@
+services:
+  shipment-api:
+    image: track-trace:latest
+    container_name: shipment-api
+    env_file:
+      - ../../.env
+    environment:
+      SHIPMENT_API_HOST: "0.0.0.0"
+      SHIPMENT_API_PORT: "10000"
+    ports:
+      - "10000:10000"
+    command: shipment-api
+    restart: unless-stopped
+
+  track-trace-cron:
+    image: track-trace:latest
+    container_name: track-trace-cron
+    env_file:
+      - ../../.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command: /bin/bash -lc 'while true; do ./scripts/run_sync.sh; sleep "${SHIPMENT_CRON_INTERVAL_SECONDS:-28800}"; done'
+    restart: unless-stopped
