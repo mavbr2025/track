@@ -49,7 +49,20 @@ class MaerskAdapter(CarrierAdapter):
         self._oauth_expires_at: datetime | None = None
 
     def fetch_status(self, shipment: ShipmentRef) -> ShipmentStatus:
-        reference, ref_type = _pick_reference(shipment)
+        candidates = _pick_references(shipment)
+        fallback_status: ShipmentStatus | None = None
+        for reference, ref_type in candidates:
+            status = self._fetch_status_for_reference(reference, ref_type)
+            if _status_has_carrier_data(status):
+                return status
+            if fallback_status is None:
+                fallback_status = status
+
+        if fallback_status is not None:
+            return fallback_status
+        raise ValueError("Missing booking/container number")
+
+    def _fetch_status_for_reference(self, reference: str, ref_type: str) -> ShipmentStatus:
         source_url = _build_maersk_tracking_url(reference)
         payload, source = self._fetch_payload(reference, ref_type)
         discovered_containers = extract_container_numbers(payload)
@@ -318,12 +331,35 @@ class MaerskAdapter(CarrierAdapter):
         raise ValueError("Maersk OAuth token response missing access_token")
 
 
-def _pick_reference(shipment: ShipmentRef) -> tuple[str, str]:
+def _pick_references(shipment: ShipmentRef) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+
     if shipment.container_no:
-        return _normalize_reference(shipment.container_no), "container"
+        container_tokens = _split_container_references(shipment.container_no)
+        if container_tokens:
+            candidates.extend((token, "container") for token in container_tokens)
+        else:
+            candidates.append((_normalize_reference(shipment.container_no), "container"))
+
     if shipment.booking_no:
-        return _normalize_reference(shipment.booking_no), "booking"
-    raise ValueError("Missing booking/container number")
+        candidates.append((_normalize_reference(shipment.booking_no), "booking"))
+
+    deduped: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for reference, ref_type in candidates:
+        if not reference:
+            continue
+        key = (reference.upper(), ref_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((reference, ref_type))
+    return deduped
+
+
+def _split_container_references(reference: str) -> list[str]:
+    tokens = [tok.strip().upper() for tok in re.split(r"[,\s]+", reference) if tok.strip()]
+    return [token for token in tokens if re.match(r"^[A-Z]{4}\d{7}$", token)]
 
 
 def _normalize_reference(reference: str) -> str:
@@ -550,6 +586,16 @@ def _should_try_web_fallback(exc: requests.HTTPError) -> bool:
     if status is None:
         return True
     return status >= 500
+
+
+def _status_has_carrier_data(status: ShipmentStatus) -> bool:
+    return bool(
+        status.latest_move
+        or status.recent_moves
+        or status.eta_time
+        or status.eta_local_text
+        or status.discovered_containers
+    )
 
 
 def _normalize_event_state(value: str | None) -> str | None:

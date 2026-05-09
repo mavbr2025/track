@@ -74,3 +74,45 @@ def test_maersk_events_401_still_raises_without_web_fallback(monkeypatch) -> Non
         assert exc.response.status_code == 401
     else:
         raise AssertionError("Expected 401 HTTPError")
+
+
+def test_maersk_tries_later_containers_when_first_has_no_events(monkeypatch) -> None:
+    monkeypatch.setenv("MAERSK_API_MODE", "events")
+    monkeypatch.setenv("MAERSK_TRACKING_API_URL", "https://api.maersk.com/track-and-trace-private/events")
+    monkeypatch.setenv("MAERSK_BEARER_TOKEN", "token")
+    monkeypatch.setenv("MAERSK_CONSUMER_KEY", "consumer")
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_fetch_payload(self, reference: str, ref_type: str):
+        calls.append((reference, ref_type))
+        if reference == "MRKU0516710":
+            return {"events": []}, "maersk-events-api:not-found"
+        return {
+            "events": [
+                {
+                    "eventType": "TRANSPORT",
+                    "transportEventTypeCode": "DEPA",
+                    "eventDateTime": "2026-05-01T10:00:00Z",
+                    "locationName": "SHANGHAI",
+                }
+            ]
+        }, f"maersk-events-api:{reference}"
+
+    monkeypatch.setattr(MaerskAdapter, "_fetch_payload", fake_fetch_payload)
+
+    status = MaerskAdapter().fetch_status(
+        ShipmentRef(
+            task_id="task-1",
+            task_name="Maersk shipment",
+            shipping_line="maersk",
+            booking_no="269822607",
+            container_no="MRKU0516710, MRKU0931970, MSKU6547177",
+            list_id="list-1",
+        )
+    )
+
+    assert calls == [("MRKU0516710", "container"), ("MRKU0931970", "container")]
+    assert status.latest_move is not None
+    assert status.latest_move.name == "Transport Departed (DEPA)"
+    assert status.raw_source == "maersk-events-api:MRKU0931970"
