@@ -15,7 +15,7 @@ COPY scripts /app/scripts
 RUN pip install --upgrade pip && \
     pip install -e ".[browser]" && \
     python3 -m playwright install chrome && \
-    chmod +x /app/scripts/run_sync.sh
+    chmod +x /app/scripts/run_sync.sh /app/scripts/run_sync_loop.sh
 
 EXPOSE 10000
 

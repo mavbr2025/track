@@ -145,13 +145,14 @@ class OneAdapter(CarrierAdapter):
                 eta_time = eta_from_voyage
                 eta_local_text = eta_from_voyage_local
                 raw_source = f"one-edh-voyage:{self.edh_base_url}/vessel/track-and-trace/voyage-list"
+        vessel_voyage = _extract_final_discharge_vessel_voyage(voyage_legs, first_item)
 
         recent_moves = self._fetch_recent_moves(booking_no, container_no)
         if not recent_moves and voyage_legs:
             departure_move = _extract_departure_move_from_voyage_list_data(voyage_legs)
             if departure_move is not None:
                 recent_moves = [departure_move]
-        latest_move = recent_moves[0] if recent_moves else _latest_move_from_search_item(first_item)
+        latest_move = _pick_latest_move(recent_moves, fallback=_latest_move_from_search_item(first_item))
 
         if self.eta_only_mode:
             return ShipmentStatus(
@@ -163,6 +164,7 @@ class OneAdapter(CarrierAdapter):
                 discovered_containers=discovered_containers,
                 raw_source=raw_source,
                 source_url=source_url,
+                vessel_voyage=vessel_voyage,
             )
 
         latest_event = first_item.get("latestEvent") if isinstance(first_item.get("latestEvent"), dict) else {}
@@ -188,6 +190,7 @@ class OneAdapter(CarrierAdapter):
             raw_source=raw_source,
             source_url=source_url,
             movement_details=movement_details,
+            vessel_voyage=vessel_voyage,
         )
 
     def _fetch_voyage_list(self, booking_no: str) -> list[dict[str, Any]]:
@@ -387,6 +390,53 @@ def _extract_departure_move_from_voyage_list_data(items: list[dict[str, Any]]) -
     )
 
 
+def _extract_final_discharge_vessel_voyage(items: list[dict[str, Any]], search_item: dict[str, Any]) -> str | None:
+    leg = _pick_final_discharge_leg(items, search_item)
+    if leg is None:
+        return None
+
+    vessel = _safe_text(leg.get("vesselEngName")) or _safe_text(leg.get("vesselName")) or _safe_text(leg.get("vesselCode"))
+    voyage = (
+        _safe_text(leg.get("outboundConsortiumVoyage"))
+        or _safe_text(leg.get("inboundConsortiumVoyage"))
+        or _schedule_voyage_text(leg)
+    )
+    parts = [part for part in (vessel, voyage) if part]
+    return " ".join(parts) or None
+
+
+def _pick_final_discharge_leg(items: list[dict[str, Any]], search_item: dict[str, Any]) -> dict[str, Any] | None:
+    if not items:
+        return None
+
+    final_pod = search_item.get("pod") if isinstance(search_item.get("pod"), dict) else {}
+    final_pod_code = _safe_text(final_pod.get("code"))
+    final_pod_name = _safe_text(final_pod.get("locationName"))
+
+    matching_legs: list[dict[str, Any]] = []
+    for item in items:
+        pod = item.get("pod") if isinstance(item.get("pod"), dict) else {}
+        pod_code = _safe_text(pod.get("locationCode")) or _safe_text(pod.get("code"))
+        pod_name = _safe_text(pod.get("locationName"))
+        if final_pod_code and pod_code and final_pod_code.strip().upper() == pod_code.strip().upper():
+            matching_legs.append(item)
+            continue
+        if final_pod_name and pod_name and final_pod_name.strip().upper() in pod_name.strip().upper():
+            matching_legs.append(item)
+
+    if matching_legs:
+        return matching_legs[-1]
+    return items[-1]
+
+
+def _schedule_voyage_text(item: dict[str, Any]) -> str | None:
+    voyage_no = _safe_text(item.get("scheduleVoyageNumber"))
+    direction = _safe_text(item.get("scheduleDirectionCode"))
+    if not voyage_no:
+        return None
+    return f"{voyage_no}{direction or ''}"
+
+
 def _extract_eta_from_cargo_events(
     cargo_events: list[Any],
     matrix_ids: set[str],
@@ -438,6 +488,15 @@ def _latest_move_from_search_item(item: dict[str, Any]) -> MovementEvent | None:
         event_time_local_text=event_local_text,
         event_state=_normalize_event_state(extract_event_state_hint(latest)),
     )
+
+
+def _pick_latest_move(moves: list[MovementEvent], *, fallback: MovementEvent | None = None) -> MovementEvent | None:
+    actual_moves = [move for move in moves if _normalize_event_state(move.event_state) == "actual"]
+    if actual_moves:
+        return actual_moves[0]
+    if moves:
+        return moves[0]
+    return fallback
 
 
 def _safe_text(value: Any) -> str | None:

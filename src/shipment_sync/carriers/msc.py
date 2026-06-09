@@ -11,6 +11,7 @@ from shipment_sync.carriers.common import (
     extract_container_numbers,
     extract_event_state_hint,
     extract_first,
+    render_vessel_voyage,
     parse_event_time,
     to_dcsa_movement_name,
 )
@@ -57,6 +58,7 @@ class MscAdapter(CarrierAdapter):
         )
         self.max_retries = int(os.getenv("MSC_MAX_RETRIES", "2"))
         self.retry_delay_seconds = float(os.getenv("MSC_RETRY_DELAY_SECONDS", "2"))
+        self.max_reference_attempts = _int_env("MSC_MAX_REFERENCE_ATTEMPTS", default=4, minimum=0)
 
         self.generic_fallback = GenericLineAdapter(
             env_prefix="MSC",
@@ -90,7 +92,10 @@ class MscAdapter(CarrierAdapter):
         return status
 
     def _fetch_status_playwright(self, shipment: ShipmentRef) -> ShipmentStatus:
-        attempts = _build_reference_attempts(shipment)
+        attempts = _limit_reference_attempts(
+            _build_reference_attempts(shipment),
+            limit=self.max_reference_attempts,
+        )
         if not attempts:
             raise ValueError("Missing booking/container number")
 
@@ -233,8 +238,10 @@ class MscAdapter(CarrierAdapter):
 def _build_reference_attempts(shipment: ShipmentRef) -> list[tuple[str, str]]:
     attempts: list[tuple[str, str]] = []
     if shipment.container_no:
-        ref = _normalize_reference(shipment.container_no)
-        if ref:
+        refs = _split_container_references(shipment.container_no)
+        if not refs:
+            refs = [_normalize_reference(shipment.container_no)]
+        for ref in refs:
             # MSC UI mode "0" = Container/Bill of Lading Number.
             attempts.append((ref, "0"))
     if shipment.booking_no:
@@ -242,7 +249,40 @@ def _build_reference_attempts(shipment: ShipmentRef) -> list[tuple[str, str]]:
         if ref:
             # MSC UI mode "1" = Booking Number.
             attempts.append((ref, "1"))
-    return attempts
+    return _dedupe_reference_attempts(attempts)
+
+
+def _limit_reference_attempts(attempts: list[tuple[str, str]], *, limit: int) -> list[tuple[str, str]]:
+    if limit <= 0 or len(attempts) <= limit:
+        return attempts
+
+    limited = attempts[:limit]
+    has_booking_attempt = any(tracking_mode == "1" for _, tracking_mode in limited)
+    booking_attempt = next(((reference, mode) for reference, mode in attempts if mode == "1"), None)
+    if booking_attempt is None or has_booking_attempt:
+        return limited
+
+    # Preserve the booking fallback when a task has many container values.
+    return [*limited[:-1], booking_attempt]
+
+
+def _split_container_references(reference: str) -> list[str]:
+    tokens = [tok.strip().upper() for tok in re.split(r"[,\s]+", reference) if tok.strip()]
+    return [token for token in tokens if re.match(r"^[A-Z]{4}\d{7}$", token)]
+
+
+def _dedupe_reference_attempts(attempts: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    deduped: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for reference, tracking_mode in attempts:
+        if not reference:
+            continue
+        key = (reference.upper(), tracking_mode)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((reference, tracking_mode))
+    return deduped
 
 
 def _normalize_reference(reference: str) -> str:
@@ -289,6 +329,8 @@ def _status_from_payload(
     if eta_time is None:
         eta_time, eta_local_text = _derive_eta_from_moves(recent_moves)
 
+    vessel_voyage = _extract_vessel_voyage(container, bill)
+
     if eta_only_mode:
         return ShipmentStatus(
             status_text=_eta_status_text(eta_time),
@@ -299,6 +341,7 @@ def _status_from_payload(
             discovered_containers=discovered_containers,
             raw_source=source,
             source_url=source_url,
+            vessel_voyage=vessel_voyage,
         )
 
     return ShipmentStatus(
@@ -313,6 +356,7 @@ def _status_from_payload(
         raw_source=source,
         source_url=source_url,
         movement_details=latest_move.name if latest_move else None,
+        vessel_voyage=vessel_voyage,
     )
 
 
@@ -403,6 +447,24 @@ def _derive_eta_from_moves(moves: list[MovementEvent]) -> tuple[datetime | None,
     return None, None
 
 
+def _extract_vessel_voyage(container: dict[str, Any], bill: dict[str, Any]) -> str | None:
+    vessel = extract_first(
+        container,
+        ["FinalPodVesselName", "PodVesselName", "VesselName", "Vessel", "vesselName", "vessel"],
+    ) or extract_first(
+        bill,
+        ["FinalPodVesselName", "PodVesselName", "VesselName", "Vessel", "vesselName", "vessel"],
+    )
+    voyage = extract_first(
+        container,
+        ["FinalPodVoyage", "PodVoyage", "VoyageNumber", "VoyageNo", "Voyage", "voyageNumber", "voyage"],
+    ) or extract_first(
+        bill,
+        ["FinalPodVoyage", "PodVoyage", "VoyageNumber", "VoyageNo", "Voyage", "voyageNumber", "voyage"],
+    )
+    return render_vessel_voyage(vessel, voyage)
+
+
 def _eta_status_text(eta: datetime | None) -> str:
     if eta is None:
         return "ETA unavailable"
@@ -421,6 +483,19 @@ def _env_bool(key: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _int_env(key: str, *, default: int, minimum: int | None = None) -> int:
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    if minimum is not None and value < minimum:
+        return default
+    return value
 
 
 def _normalize_event_state(value: str | None) -> str | None:

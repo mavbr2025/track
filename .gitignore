@@ -16,3 +16,17 @@ __pycache__/
 /build/
 /output/
 /MTM Track and Trace.app/
+*.app/
+backups/
+data/
+node_modules/
+tmp/
+website/
+/build
+/node_modules
+/output
+/website
+mtmlogix-security-audit/
+ONE_E2E_Project/
+*.bak.*
+*.backup.*

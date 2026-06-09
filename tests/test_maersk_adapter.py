@@ -3,7 +3,7 @@ from __future__ import annotations
 import requests
 
 from shipment_sync.carriers import maersk
-from shipment_sync.carriers.maersk import MaerskAdapter
+from shipment_sync.carriers.maersk import MaerskAdapter, _status_from_events
 from shipment_sync.models import ShipmentRef
 
 
@@ -116,3 +116,28 @@ def test_maersk_tries_later_containers_when_first_has_no_events(monkeypatch) -> 
     assert status.latest_move is not None
     assert status.latest_move.name == "Transport Departed (DEPA)"
     assert status.raw_source == "maersk-events-api:MRKU0931970"
+
+
+def test_maersk_status_sets_final_arrival_vessel_voyage() -> None:
+    status = _status_from_events(
+        [
+            {
+                "transportEventTypeCode": "DEPA",
+                "eventDateTime": "2026-05-01T10:00:00Z",
+                "locationName": "NINGBO",
+                "vesselName": "MAERSK ORIGIN",
+                "carrierExportVoyageNumber": "601E",
+            },
+            {
+                "transportEventTypeCode": "ARRI",
+                "eventDateTime": "2026-06-04T07:00:00Z",
+                "locationName": "PUERTO QUETZAL",
+                "vesselName": "MAERSK FINAL",
+                "carrierExportVoyageNumber": "621E",
+            },
+        ],
+        "maersk-events-api:test",
+        source_url="https://www.maersk.com/tracking/CONT",
+    )
+
+    assert status.vessel_voyage == "MAERSK FINAL 621E"

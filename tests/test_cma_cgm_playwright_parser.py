@@ -85,6 +85,7 @@ def test_cma_playwright_text_maps_tracking_detail_to_status() -> None:
     assert status.latest_move.name == "Container Gated In (GTIN)"
     assert status.latest_move.location == "SANTO TOMAS DE CASTILLA"
     assert status.latest_move.event_time_local_text == "2026-04-27T18:02:00"
+    assert status.vessel_voyage == "A. OBELIX (0YKCVN1MA)"
 
     move_pairs = {(move.name, move.event_time_local_text, move.location) for move in status.recent_moves}
     assert ("Transport Departed (DEPA)", "2026-03-16T18:00:00", "BARCELONA") in move_pairs

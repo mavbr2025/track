@@ -1,12 +1,17 @@
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import os
+import re
+import signal
 import socket
+import threading
 from urllib.parse import urlparse
 
 import requests
 
+from shipment_sync.audit import SafeSyncAuditLogger
 from shipment_sync.carriers.registry import build_carrier_registry
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
@@ -29,6 +34,7 @@ class UpdatedShipment:
     latest_move_location: str | None
     latest_move_time_local_text: str | None
     movement_details: str | None
+    vessel_voyage: str | None
     list_id: str
     list_name: str | None
 
@@ -45,8 +51,30 @@ class SyncStats:
 
 
 def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) -> SyncStats:
+    audit = SafeSyncAuditLogger.from_settings(client.settings)
+    try:
+        stats = _run_sync(client, shipments=shipments, audit=audit)
+    except Exception as exc:
+        if audit is not None:
+            audit.finish_failed(exc)
+        raise
+    if audit is not None:
+        audit.finish_success(stats)
+    return stats
+
+
+def _run_sync(
+    client: ClickUpClient,
+    shipments: list[ShipmentRef] | None = None,
+    audit: SafeSyncAuditLogger | None = None,
+) -> SyncStats:
     adapters = build_carrier_registry()
     all_shipments = shipments if shipments is not None else client.list_shipments()
+    if audit is not None:
+        audit.log_event(
+            level="info",
+            message=f"Loaded {len(all_shipments)} shipment reference(s) from ClickUp.",
+        )
 
     updated_items: list[UpdatedShipment] = []
     unchanged = 0
@@ -63,13 +91,13 @@ def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) 
     supported_lines = set(adapters.keys())
     allowed_lines = set(client.settings.shipment_allowed_lines or [])
     excluded_lines = set(client.settings.shipment_excluded_lines or [])
-    min_sync_interval_hours = max(0, client.settings.shipment_min_sync_interval_hours)
+    default_min_sync_interval_hours = max(0, client.settings.shipment_min_sync_interval_hours)
     now_utc = datetime.now(timezone.utc)
     eligible_shipments = []
 
-    if min_sync_interval_hours > 0 and not client.settings.cf_status_last_checked:
+    if _any_min_sync_interval_configured(default_min_sync_interval_hours) and not client.settings.cf_status_last_checked:
         print(
-            "SHIPMENT_MIN_SYNC_INTERVAL_HOURS is set but CLICKUP_CF_STATUS_LAST_CHECKED is not configured; "
+            "A shipment min sync interval is set but CLICKUP_CF_STATUS_LAST_CHECKED is not configured; "
             "recent-sync prefilter is disabled.",
             file=sys.stderr,
         )
@@ -78,17 +106,45 @@ def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) 
         line_name = shipment.shipping_line
         if line_name in excluded_lines:
             prefiltered_excluded_counts[line_name] = prefiltered_excluded_counts.get(line_name, 0) + 1
+            if audit is not None:
+                audit.log_task(
+                    shipment=shipment,
+                    outcome="prefiltered_excluded",
+                    message=f"Carrier {line_name} is excluded by SHIPMENT_EXCLUDED_LINES.",
+                )
             continue
         if allowed_lines and line_name not in allowed_lines:
             prefiltered_not_allowed_counts[line_name] = prefiltered_not_allowed_counts.get(line_name, 0) + 1
+            if audit is not None:
+                audit.log_task(
+                    shipment=shipment,
+                    outcome="prefiltered_not_allowed",
+                    message=f"Carrier {line_name} is not in SHIPMENT_ALLOWED_LINES.",
+                )
             continue
+        min_sync_interval_hours = _shipment_min_sync_interval_hours(
+            shipment.shipping_line,
+            default_min_sync_interval_hours,
+        )
         if min_sync_interval_hours > 0 and shipment.last_checked_at is not None:
             age_seconds = (now_utc - shipment.last_checked_at).total_seconds()
             if age_seconds < min_sync_interval_hours * 3600:
                 prefiltered_recent_counts[line_name] = prefiltered_recent_counts.get(line_name, 0) + 1
+                if audit is not None:
+                    audit.log_task(
+                        shipment=shipment,
+                        outcome="prefiltered_recent",
+                        message=f"Last T&T update is newer than {min_sync_interval_hours}h.",
+                    )
                 continue
         if client.settings.shipment_skip_unsupported_lines and line_name not in supported_lines:
             unsupported_line_counts[line_name] = unsupported_line_counts.get(line_name, 0) + 1
+            if audit is not None:
+                audit.log_task(
+                    shipment=shipment,
+                    outcome="skipped_unsupported",
+                    message=f"No adapter registered for carrier {line_name}.",
+                )
             continue
         eligible_shipments.append(shipment)
 
@@ -104,6 +160,12 @@ def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) 
                 reason = preflight_failures.get(shipment.shipping_line)
                 if reason:
                     failed_counts[shipment.shipping_line] = failed_counts.get(shipment.shipping_line, 0) + 1
+                    if audit is not None:
+                        audit.log_task(
+                            shipment=shipment,
+                            outcome="skipped_preflight",
+                            message=reason,
+                        )
                     skipped += 1
                     continue
                 kept_shipments.append(shipment)
@@ -113,6 +175,12 @@ def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) 
                 print(f"- {line_name}: {count} task(s) | {preflight_failures[line_name]}", file=sys.stderr)
 
     total_eligible = len(eligible_shipments)
+    if audit is not None:
+        audit.log_event(
+            level="info",
+            message=f"Starting shipment sync for {total_eligible} eligible task(s).",
+            data={"total_candidates": total_candidates, "total_eligible": total_eligible},
+        )
     if total_eligible:
         print(f"Starting shipment sync for {total_eligible} eligible task(s)...", file=sys.stderr)
 
@@ -129,11 +197,18 @@ def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) 
         adapter = adapters.get(shipment.shipping_line)
         if not adapter:
             unsupported_line_counts[shipment.shipping_line] = unsupported_line_counts.get(shipment.shipping_line, 0) + 1
+            if audit is not None:
+                audit.log_task(
+                    shipment=shipment,
+                    outcome="skipped_unsupported",
+                    message=f"No adapter registered for carrier {shipment.shipping_line}.",
+                )
             skipped += 1
             continue
 
         try:
-            status = adapter.fetch_status(shipment)
+            with _carrier_call_timeout(shipment):
+                status = adapter.fetch_status(shipment)
             write_result = client.update_shipment_status(shipment, status)
             if write_result.changed:
                 updated_items.append(
@@ -152,25 +227,52 @@ def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) 
                         latest_move_location=status.latest_move.location if status.latest_move else None,
                         latest_move_time_local_text=status.latest_move.event_time_local_text if status.latest_move else None,
                         movement_details=status.movement_details,
+                        vessel_voyage=status.vessel_voyage,
                         list_id=shipment.list_id,
                         list_name=shipment.list_name,
                     )
                 )
                 updated_by_list[list_label] = updated_by_list.get(list_label, 0) + 1
+                if audit is not None:
+                    audit.log_task(
+                        shipment=shipment,
+                        outcome="updated",
+                        status=status,
+                        message=write_result.status_value,
+                    )
             else:
                 unchanged += 1
                 unchanged_by_list[list_label] = unchanged_by_list.get(list_label, 0) + 1
+                if audit is not None:
+                    audit.log_task(
+                        shipment=shipment,
+                        outcome="unchanged",
+                        status=status,
+                        message=write_result.status_value,
+                    )
         except Exception as exc:
             message = str(exc)
             if "adapter not configured" in message.lower():
                 key = f"{shipment.shipping_line}: {message}"
                 adapter_config_counts[key] = adapter_config_counts.get(key, 0) + 1
+                if audit is not None:
+                    audit.log_task(
+                        shipment=shipment,
+                        outcome="skipped_adapter_config",
+                        error=message,
+                    )
                 skipped += 1
                 continue
             print(
                 f"Skipped task {shipment.task_id} ({shipment.task_name}): {exc}",
                 file=sys.stderr,
             )
+            if audit is not None:
+                audit.log_task(
+                    shipment=shipment,
+                    outcome="skipped_error",
+                    error=message,
+                )
             skipped += 1
 
     if prefiltered_excluded_counts:
@@ -184,10 +286,7 @@ def run_sync(client: ClickUpClient, shipments: list[ShipmentRef] | None = None) 
             print(f"- {line_name}: {count} task(s)", file=sys.stderr)
 
     if prefiltered_recent_counts:
-        print(
-            f"Prefiltered recently synced tasks (< {min_sync_interval_hours}h):",
-            file=sys.stderr,
-        )
+        print("Prefiltered recently synced tasks:", file=sys.stderr)
         for line_name, count in sorted(prefiltered_recent_counts.items(), key=lambda item: (-item[1], item[0])):
             print(f"- {line_name}: {count} task(s)", file=sys.stderr)
 
@@ -216,6 +315,66 @@ def _list_label(list_name: str | None, list_id: str) -> str:
     if list_name and list_name.strip():
         return f"{list_name.strip()} ({list_id})"
     return list_id
+
+
+@contextmanager
+def _carrier_call_timeout(shipment: ShipmentRef):
+    timeout_seconds = _carrier_call_timeout_seconds(shipment.shipping_line)
+    if (
+        timeout_seconds <= 0
+        or threading.current_thread() is not threading.main_thread()
+        or not hasattr(signal, "SIGALRM")
+        or not hasattr(signal, "setitimer")
+    ):
+        yield
+        return
+
+    def _raise_timeout(signum, frame):
+        raise TimeoutError(
+            f"Carrier lookup exceeded {timeout_seconds}s per-shipment timeout "
+            f"for task {shipment.task_id} ({shipment.shipping_line})."
+        )
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def _carrier_call_timeout_seconds(shipping_line: str) -> int:
+    prefix = _env_prefix_for_line(shipping_line)
+    if prefix:
+        line_timeout = _int_env(f"{prefix}_PER_TASK_TIMEOUT_SECONDS", default=0, min_value=0)
+        if line_timeout > 0:
+            return line_timeout
+    return _int_env("SHIPMENT_PER_TASK_TIMEOUT_SECONDS", default=0, min_value=0)
+
+
+def _shipment_min_sync_interval_hours(shipping_line: str, default_hours: int) -> int:
+    prefix = _env_prefix_for_line(shipping_line)
+    if prefix:
+        line_interval = _int_env(f"{prefix}_MIN_SYNC_INTERVAL_HOURS", default=0, min_value=0)
+        if line_interval > 0:
+            return line_interval
+    return default_hours
+
+
+def _any_min_sync_interval_configured(default_hours: int) -> bool:
+    if default_hours > 0:
+        return True
+    for key in os.environ:
+        if key.endswith("_MIN_SYNC_INTERVAL_HOURS") and key != "SHIPMENT_MIN_SYNC_INTERVAL_HOURS":
+            if _int_env(key, default=0, min_value=0) > 0:
+                return True
+    return False
+
+
+def _env_prefix_for_line(shipping_line: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", (shipping_line or "").upper()).strip("_")
 
 
 def _preflight_supported_lines(lines: set[str], settings: Settings) -> dict[str, str]:

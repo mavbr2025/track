@@ -233,6 +233,112 @@ def extract_eta_time(payload: Any) -> datetime | None:
     return parse_event_time(eta_raw)
 
 
+def render_vessel_voyage(vessel: str | None, voyage: str | None) -> str | None:
+    parts = [_clean_vessel_voyage_part(part) for part in (vessel, voyage)]
+    rendered = " ".join(part for part in parts if part)
+    return rendered or None
+
+
+def extract_event_vessel_voyage(event: dict[str, Any]) -> str | None:
+    vessel = extract_first(
+        event,
+        [
+            "vesselName",
+            "vesselEngName",
+            "vesselEnglishName",
+            "nameOfVessel",
+            "transportName",
+            "transport",
+            "vessel",
+        ],
+    )
+    voyage = extract_first(
+        event,
+        [
+            "carrierExportVoyageNumber",
+            "carrierImportVoyageNumber",
+            "exportVoyageNumber",
+            "importVoyageNumber",
+            "carrierVoyageNumber",
+            "voyageNumber",
+            "scheduleVoyageNumber",
+            "outboundConsortiumVoyage",
+            "inboundConsortiumVoyage",
+            "voyageNo",
+            "voyage",
+        ],
+    )
+    return render_vessel_voyage(vessel, voyage)
+
+
+def extract_final_destination_vessel_voyage(
+    events: list[dict[str, Any]],
+    *,
+    final_location: str | None = None,
+) -> str | None:
+    candidates: list[tuple[int, datetime | None, int, str]] = []
+    normalized_final_location = _normalize_location_token(final_location)
+
+    for idx, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        vessel_voyage = extract_event_vessel_voyage(event)
+        if not vessel_voyage:
+            continue
+
+        event_location = _event_location(event)
+        location_score = 0
+        if normalized_final_location:
+            normalized_event_location = _normalize_location_token(event_location)
+            if normalized_event_location and (
+                normalized_event_location == normalized_final_location
+                or normalized_final_location in normalized_event_location
+                or normalized_event_location in normalized_final_location
+            ):
+                location_score = 2
+        relevant_score = _final_destination_event_score(event)
+        if normalized_final_location and not location_score:
+            continue
+        if not normalized_final_location and not relevant_score:
+            continue
+
+        event_time = parse_event_time(
+            extract_first(
+                event,
+                [
+                    "eventDateTime",
+                    "eventLocalPortDate",
+                    "eventTime",
+                    "actualTime",
+                    "timestamp",
+                    "dateTime",
+                    "eventDate",
+                    "date",
+                    "locationDateTime",
+                    "actualArrivalDate",
+                    "estimatedDateOfArrival",
+                    "plannedArrivalDateTime",
+                    "scheduledArrivalDateTime",
+                    "cgoAvailTm",
+                ],
+            )
+        )
+        candidates.append((location_score + relevant_score, event_time, idx, vessel_voyage))
+
+    if not candidates:
+        return None
+    best = max(
+        candidates,
+        key=lambda item: (
+            item[0],
+            item[1] is not None,
+            item[1].isoformat() if item[1] is not None else "",
+            item[2],
+        ),
+    )
+    return best[3]
+
+
 def _extract_first_bool(payload: Any, candidate_keys: list[str]) -> bool | None:
     wanted = {k.lower() for k in candidate_keys}
     queue = [payload]
@@ -248,6 +354,73 @@ def _extract_first_bool(payload: Any, candidate_keys: list[str]) -> bool | None:
         elif isinstance(item, list):
             queue.extend(item)
     return None
+
+
+def _clean_vessel_voyage_part(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = re.sub(r"\s+", " ", str(value)).strip()
+    if not cleaned or cleaned in {"---", "-", "N/A", "NA"}:
+        return None
+    return cleaned
+
+
+def _event_location(event: dict[str, Any]) -> str | None:
+    return extract_first(
+        event,
+        [
+            "locationName",
+            "location",
+            "city",
+            "port",
+            "eventLocation",
+            "nodeName",
+            "unLocCode",
+            "UNLocationCode",
+            "portOfDischarge",
+            "placeOfDelivery",
+            "destination",
+        ],
+    )
+
+
+def _final_destination_event_score(event: dict[str, Any]) -> int:
+    transport_code = _normalized_code(extract_first(event, ["transportEventTypeCode"]))
+    equipment_code = _normalized_code(extract_first(event, ["equipmentEventTypeCode"]))
+    if equipment_code == "DISC":
+        return 3
+    if transport_code == "ARRI":
+        return 2
+
+    raw_name = extract_first(
+        event,
+        [
+            "eventName",
+            "eventDescription",
+            "milestoneName",
+            "status",
+            "movement",
+            "description",
+            "eventType",
+            "containerNumberStatus",
+            "label",
+        ],
+    )
+    normalized = (raw_name or "").strip().lower()
+    if not normalized:
+        return 0
+    if "discharg" in normalized:
+        return 3
+    if "arriv" in normalized or "arrival" in normalized:
+        return 2
+    return 0
+
+
+def _normalize_location_token(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = re.sub(r"[^A-Za-z0-9]+", " ", str(value)).strip().lower()
+    return re.sub(r"\s+", " ", normalized) or None
 
 
 def _coerce_bool(value: Any) -> bool | None:

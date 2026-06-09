@@ -8,6 +8,7 @@ import requests
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
     extract_container_numbers,
+    extract_final_destination_vessel_voyage,
     extract_event_state_hint,
     extract_eta_time,
     extract_first,
@@ -440,6 +441,7 @@ def _status_from_events(events: list[dict], source: str, *, source_url: str | No
     detail_parts = [x for x in [event_type, classifier, movement_code] if x]
     movement_details = " / ".join(detail_parts) if detail_parts else None
     recent_moves = [_event_to_movement(event) for event in ordered]
+    vessel_voyage = extract_final_destination_vessel_voyage(events)
     return ShipmentStatus(
         status_text=status_text,
         location=location,
@@ -451,6 +453,7 @@ def _status_from_events(events: list[dict], source: str, *, source_url: str | No
         raw_source=raw_source,
         source_url=source_url,
         movement_details=movement_details,
+        vessel_voyage=vessel_voyage,
     )
 
 

@@ -12,6 +12,7 @@ import requests
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
     extract_container_numbers,
+    extract_final_destination_vessel_voyage,
     extract_event_state_hint,
     extract_eta_time,
     extract_first,
@@ -108,6 +109,7 @@ class CmaCgmAdapter(CarrierAdapter):
         discovered_containers = extract_container_numbers(payload)
         recent_moves = _extract_moves(payload)
         latest_move = recent_moves[0] if recent_moves else None
+        vessel_voyage = extract_final_destination_vessel_voyage(_extract_event_list(payload))
         eta_time = extract_eta_time(payload)
         eta_local_text = _extract_eta_raw(payload)
         if eta_time is None:
@@ -126,6 +128,7 @@ class CmaCgmAdapter(CarrierAdapter):
                 discovered_containers=discovered_containers,
                 raw_source=_append_raw_source(source, f"cma-playwright-error:{playwright_error}") if playwright_error else source,
                 source_url=source_url,
+                vessel_voyage=vessel_voyage,
             )
 
         status_text = (
@@ -157,6 +160,7 @@ class CmaCgmAdapter(CarrierAdapter):
             raw_source=_append_raw_source(source, f"cma-playwright-error:{playwright_error}") if playwright_error else source,
             source_url=source_url,
             movement_details=movement_details,
+            vessel_voyage=vessel_voyage,
         )
 
     def _fetch_status_playwright(self, *, reference: str, ref_type: str, source_url: str) -> ShipmentStatus:
@@ -382,6 +386,7 @@ def _status_from_playwright_text(
     recent_moves = _extract_playwright_moves(text)
     latest_move = recent_moves[0] if recent_moves else None
     eta_time, eta_local_text = _extract_playwright_eta(text, recent_moves)
+    vessel_voyage = _extract_playwright_final_vessel_voyage(text)
     status_text = _extract_playwright_status_text(text) or (latest_move.name if latest_move else None) or _eta_status_text(eta_time)
     containers = extract_container_numbers(text)
     if re.match(r"^[A-Za-z]{4}\d{7}$", reference) and reference not in containers:
@@ -399,6 +404,7 @@ def _status_from_playwright_text(
         raw_source=raw_source,
         source_url=source_url,
         movement_details=latest_move.name if latest_move else None,
+        vessel_voyage=vessel_voyage,
     )
 
 
@@ -475,6 +481,40 @@ def _extract_playwright_moves(text: str) -> list[MovementEvent]:
         key=lambda move: (move.event_time is not None, move.event_time.isoformat() if move.event_time else ""),
         reverse=True,
     )
+
+
+def _extract_playwright_final_vessel_voyage(text: str) -> str | None:
+    lines = _clean_text_lines(text)
+    candidates: list[tuple[datetime, int, str]] = []
+    idx = 0
+    while idx < len(lines):
+        date_line = lines[idx]
+        if not _is_cma_date_line(date_line) or idx + 3 >= len(lines):
+            idx += 1
+            continue
+
+        time_line = lines[idx + 1]
+        move_label = lines[idx + 2]
+        if not _is_cma_time_line(time_line):
+            idx += 1
+            continue
+
+        vessel_line_idx = idx + 4
+        vessel_line = lines[vessel_line_idx] if vessel_line_idx < len(lines) and _looks_like_vessel_line(lines[vessel_line_idx]) else None
+        if vessel_line and _cma_final_vessel_event(move_label):
+            parsed_time, _ = _parse_cma_datetime(date_line, time_line)
+            if parsed_time is not None:
+                candidates.append((parsed_time, idx, vessel_line))
+        idx += 5 if vessel_line else 4
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def _cma_final_vessel_event(value: str) -> bool:
+    normalized = re.sub(r"\s+", " ", value).strip().upper()
+    return normalized in {"VESSEL ARRIVAL", "DISCHARGED", "DISCHARGED IN TRANSHIPMENT"}
 
 
 def _clean_text_lines(text: str) -> list[str]:

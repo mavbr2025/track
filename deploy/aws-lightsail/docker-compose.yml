@@ -7,17 +7,171 @@ services:
     environment:
       SHIPMENT_API_HOST: "0.0.0.0"
       SHIPMENT_API_PORT: "10000"
+      SHIPMENT_AUDIT_DB_PATH: "/data/shipment-sync/audit.sqlite3"
+      SHIPMENT_AUDIT_SOURCE: "aws-api"
+    volumes:
+      - ../../data:/data/shipment-sync
     ports:
+      - "80:10000"
       - "10000:10000"
     command: shipment-api
     restart: unless-stopped
 
-  track-trace-cron:
+  track-trace-cron-maersk:
     image: track-trace:latest
-    container_name: track-trace-cron
+    container_name: track-trace-cron-maersk
     env_file:
       - ../../.env
     environment:
       PYTHONUNBUFFERED: "1"
-    command: /bin/bash -lc 'while true; do ./scripts/run_sync.sh; sleep "${SHIPMENT_CRON_INTERVAL_SECONDS:-28800}"; done'
+      SHIPMENT_ALLOWED_LINES: "maersk"
+      SHIPMENT_AUDIT_DB_PATH: "/data/shipment-sync/audit.sqlite3"
+      SHIPMENT_AUDIT_SOURCE: "aws-cron-maersk"
+      SHIPMENT_CRON_INTERVAL_SECONDS: "21600"
+      SHIPMENT_RUN_TIMEOUT_SECONDS: "5400"
+      SHIPMENT_PREFLIGHT_ENABLED: "false"
+      CLICKUP_LIST_ID: "901703461634"
+      CLICKUP_LIST_IDS: "901703461634,901703252746,169175872,901711638279,901706298710,901711807584,901709177285"
+      CLICKUP_SPACE_IDS: "90171126576,90171139728"
+      CLICKUP_DISCOVER_LISTS_FROM_SPACES: "true"
+      CLICKUP_DISCOVER_LISTS_FROM_TEAM: "false"
+      CLICKUP_DISCOVERY_VALIDATE_SCHEMA: "true"
+      CLICKUP_DISCOVERY_LIST_NAME_INCLUDE: "shipment"
+      CLICKUP_DISCOVERY_CACHE_PATH: "/data/shipment-sync/clickup-discovery-lists.json"
+      CLICKUP_DISCOVERY_CACHE_TTL_SECONDS: "86400"
+    volumes:
+      - ../../data:/data/shipment-sync
+    command: ./scripts/run_sync_loop.sh
+    restart: unless-stopped
+
+  track-trace-cron-one:
+    image: track-trace:latest
+    container_name: track-trace-cron-one
+    env_file:
+      - ../../.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      SHIPMENT_ALLOWED_LINES: "one"
+      SHIPMENT_AUDIT_DB_PATH: "/data/shipment-sync/audit.sqlite3"
+      SHIPMENT_AUDIT_SOURCE: "aws-cron-one"
+      SHIPMENT_CRON_INTERVAL_SECONDS: "21600"
+      SHIPMENT_CRON_INITIAL_DELAY_SECONDS: "900"
+      SHIPMENT_RUN_TIMEOUT_SECONDS: "5400"
+      SHIPMENT_PREFLIGHT_ENABLED: "false"
+      CLICKUP_LIST_ID: "901703461634"
+      CLICKUP_LIST_IDS: "901703461634,901703252746,169175872,901711638279,901706298710,901711807584,901709177285"
+      CLICKUP_SPACE_IDS: "90171126576,90171139728"
+      CLICKUP_DISCOVER_LISTS_FROM_SPACES: "true"
+      CLICKUP_DISCOVER_LISTS_FROM_TEAM: "false"
+      CLICKUP_DISCOVERY_VALIDATE_SCHEMA: "true"
+      CLICKUP_DISCOVERY_LIST_NAME_INCLUDE: "shipment"
+      CLICKUP_DISCOVERY_CACHE_PATH: "/data/shipment-sync/clickup-discovery-lists.json"
+      CLICKUP_DISCOVERY_CACHE_TTL_SECONDS: "86400"
+    volumes:
+      - ../../data:/data/shipment-sync
+    command: ./scripts/run_sync_loop.sh
+    restart: unless-stopped
+
+  track-trace-cron-msc:
+    image: track-trace:latest
+    container_name: track-trace-cron-msc
+    env_file:
+      - ../../.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      SHIPMENT_ALLOWED_LINES: "msc"
+      SHIPMENT_AUDIT_DB_PATH: "/data/shipment-sync/audit.sqlite3"
+      SHIPMENT_AUDIT_SOURCE: "aws-cron-msc"
+      SHIPMENT_CRON_INTERVAL_SECONDS: "21600"
+      SHIPMENT_CRON_INITIAL_DELAY_SECONDS: "1800"
+      SHIPMENT_RUN_TIMEOUT_SECONDS: "5400"
+      SHIPMENT_PREFLIGHT_ENABLED: "false"
+      CLICKUP_LIST_ID: "901703461634"
+      CLICKUP_LIST_IDS: "901703461634,901703252746,169175872,901711638279,901706298710,901711807584,901709177285"
+      CLICKUP_SPACE_IDS: "90171126576,90171139728"
+      CLICKUP_DISCOVER_LISTS_FROM_SPACES: "true"
+      CLICKUP_DISCOVER_LISTS_FROM_TEAM: "false"
+      CLICKUP_DISCOVERY_VALIDATE_SCHEMA: "true"
+      CLICKUP_DISCOVERY_LIST_NAME_INCLUDE: "shipment"
+      CLICKUP_DISCOVERY_CACHE_PATH: "/data/shipment-sync/clickup-discovery-lists.json"
+      CLICKUP_DISCOVERY_CACHE_TTL_SECONDS: "86400"
+      MSC_MIN_SYNC_INTERVAL_HOURS: "18"
+      MSC_PER_TASK_TIMEOUT_SECONDS: "75"
+      MSC_PLAYWRIGHT_TIMEOUT_SECONDS: "30"
+      MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS: "8"
+      MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS: "0"
+      MSC_MAX_REFERENCE_ATTEMPTS: "4"
+      MSC_MAX_RETRIES: "0"
+    volumes:
+      - ../../data:/data/shipment-sync
+    command: ./scripts/run_sync_loop.sh
+    restart: unless-stopped
+
+  track-trace-cron-cma-cgm:
+    image: track-trace:latest
+    container_name: track-trace-cron-cma-cgm
+    env_file:
+      - ../../.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      SHIPMENT_ALLOWED_LINES: "cma - cgm"
+      SHIPMENT_AUDIT_DB_PATH: "/data/shipment-sync/audit.sqlite3"
+      SHIPMENT_AUDIT_SOURCE: "aws-cron-cma-cgm"
+      SHIPMENT_CRON_INTERVAL_SECONDS: "21600"
+      SHIPMENT_CRON_INITIAL_DELAY_SECONDS: "2700"
+      SHIPMENT_RUN_TIMEOUT_SECONDS: "5400"
+      SHIPMENT_PREFLIGHT_ENABLED: "false"
+      CLICKUP_LIST_ID: "901703461634"
+      CLICKUP_LIST_IDS: "901703461634,901703252746,169175872,901711638279,901706298710,901711807584,901709177285"
+      CLICKUP_SPACE_IDS: "90171126576,90171139728"
+      CLICKUP_DISCOVER_LISTS_FROM_SPACES: "false"
+      CLICKUP_DISCOVER_LISTS_FROM_TEAM: "false"
+      CMA_CGM_USE_PLAYWRIGHT: "true"
+      CMA_CGM_PLAYWRIGHT_REQUIRED: "true"
+      CMA_CGM_PLAYWRIGHT_HEADLESS: "true"
+      CMA_CGM_PLAYWRIGHT_TIMEOUT_SECONDS: "90"
+      CMA_CGM_PLAYWRIGHT_WAIT_SECONDS: "8"
+      CMA_CGM_TRACKING_URL_TEMPLATE: "https://www.cma-cgm.com/ebusiness/tracking/detail/{reference}"
+      CMA_CGM_TRACKING_API_URL: ""
+      CMA_CGM_API_BASE_URL: ""
+      CMA_CGM_API_METHOD: ""
+      CMA_CGM_API_METHOD_PATH: ""
+    volumes:
+      - ../../data:/data/shipment-sync
+    command: ./scripts/run_sync_loop.sh
+    restart: unless-stopped
+
+  track-trace-cron-wan-hai:
+    image: track-trace:latest
+    container_name: track-trace-cron-wan-hai
+    env_file:
+      - ../../.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      SHIPMENT_ALLOWED_LINES: "wan hai"
+      SHIPMENT_AUDIT_DB_PATH: "/data/shipment-sync/audit.sqlite3"
+      SHIPMENT_AUDIT_SOURCE: "aws-cron-wan-hai"
+      SHIPMENT_CRON_INTERVAL_SECONDS: "21600"
+      SHIPMENT_CRON_INITIAL_DELAY_SECONDS: "3600"
+      SHIPMENT_RUN_TIMEOUT_SECONDS: "5400"
+      SHIPMENT_PREFLIGHT_ENABLED: "false"
+      CLICKUP_LIST_ID: "901703461634"
+      CLICKUP_LIST_IDS: "901703461634,901703252746,169175872,901711638279,901706298710,901711807584,901709177285"
+      CLICKUP_SPACE_IDS: "90171126576,90171139728"
+      CLICKUP_DISCOVER_LISTS_FROM_SPACES: "true"
+      CLICKUP_DISCOVER_LISTS_FROM_TEAM: "false"
+      CLICKUP_DISCOVERY_VALIDATE_SCHEMA: "true"
+      CLICKUP_DISCOVERY_LIST_NAME_INCLUDE: "shipment"
+      CLICKUP_DISCOVERY_CACHE_PATH: "/data/shipment-sync/clickup-discovery-lists.json"
+      CLICKUP_DISCOVERY_CACHE_TTL_SECONDS: "86400"
+      WAN_HAI_USE_PLAYWRIGHT: "true"
+      WAN_HAI_PLAYWRIGHT_REQUIRED: "true"
+      WAN_HAI_PLAYWRIGHT_HEADLESS: "true"
+      WAN_HAI_PLAYWRIGHT_TIMEOUT_SECONDS: "90"
+      WAN_HAI_PLAYWRIGHT_REQUEST_DELAY_SECONDS: "8"
+      WAN_HAI_PLAYWRIGHT_TRACKING_URL: "https://www.wanhai.com/views/cargoTrack/CargoTrack.xhtml"
+      WAN_HAI_PLAYWRIGHT_USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    volumes:
+      - ../../data:/data/shipment-sync
+    command: ./scripts/run_sync_loop.sh
     restart: unless-stopped

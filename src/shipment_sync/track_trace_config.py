@@ -35,7 +35,7 @@ def inspect_track_trace_env() -> TrackTraceConfigReport:
     recommended_items = [
         "SHIPMENT_API_TRIGGER_TOKEN",
         "CLICKUP_CF_STATUS_LAST_CHECKED",
-        "CLICKUP_CF_SHIPMENT_STATUS",
+        "CLICKUP_CF_SHIPMENT_STATUS or CLICKUP_USE_TASK_STATUS",
     ]
 
     missing_required_items: list[str] = []
@@ -51,15 +51,22 @@ def inspect_track_trace_env() -> TrackTraceConfigReport:
             missing_required_items.append(key)
 
     missing_recommended_items: list[str] = []
-    for key in ("SHIPMENT_API_TRIGGER_TOKEN", "CLICKUP_CF_STATUS_LAST_CHECKED", "CLICKUP_CF_SHIPMENT_STATUS"):
+    for key in ("SHIPMENT_API_TRIGGER_TOKEN", "CLICKUP_CF_STATUS_LAST_CHECKED"):
         if not _optional(key):
             missing_recommended_items.append(key)
+    has_status_destination = bool(_optional("CLICKUP_CF_SHIPMENT_STATUS")) or (
+        _bool("CLICKUP_USE_TASK_STATUS", default=False)
+    )
+    if not has_status_destination:
+        missing_recommended_items.append(
+            "CLICKUP_CF_SHIPMENT_STATUS or CLICKUP_USE_TASK_STATUS"
+        )
     has_trigger_token = bool(_optional("SHIPMENT_API_TRIGGER_TOKEN"))
 
     notes = [
         "Set SHIPMENT_API_TRIGGER_TOKEN before exposing trigger endpoints publicly.",
         "Use CLICKUP_CF_STATUS_LAST_CHECKED together with SHIPMENT_MIN_SYNC_INTERVAL_HOURS to avoid unnecessary carrier calls.",
-        "Use CLICKUP_CF_SHIPMENT_STATUS if you want the carrier status stored in a dedicated ClickUp custom field.",
+        "Use CLICKUP_CF_SHIPMENT_STATUS for a dedicated ClickUp custom field, or CLICKUP_USE_TASK_STATUS for task-level operational status progression.",
     ]
 
     return TrackTraceConfigReport(
@@ -79,3 +86,10 @@ def _optional(key: str) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _bool(key: str, *, default: bool = False) -> bool:
+    value = os.getenv(key)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}

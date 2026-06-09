@@ -7,7 +7,9 @@ from shipment_sync.config import Settings
 from shipment_sync.carriers.one import (
     OneAdapter,
     _extract_eta_from_cargo_events,
+    _extract_final_discharge_vessel_voyage,
     _latest_move_from_search_item,
+    _pick_latest_move,
 )
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 
@@ -31,8 +33,8 @@ class _StubSession:
         return _StubResponse(self.payload)
 
 
-def _settings() -> Settings:
-    return Settings(
+def _settings(**overrides: object) -> Settings:
+    base = dict(
         clickup_api_token="token",
         clickup_oauth_access_token=None,
         clickup_oauth_client_id=None,
@@ -59,6 +61,8 @@ def _settings() -> Settings:
         cf_gate_out_delivery="gtot-delivery-field",
         cf_gate_in_empty="gtin-empty-field",
     )
+    base.update(overrides)
+    return Settings(**base)
 
 
 def test_fetch_recent_moves_uses_trigger_type_for_actual_events() -> None:
@@ -119,6 +123,85 @@ def test_latest_move_from_search_item_uses_trigger_type() -> None:
     assert move.location == "PUERTO QUETZAL"
     assert move.event_time == datetime(2026, 4, 9, 11, 20, tzinfo=timezone.utc)
     assert move.event_state == "actual"
+
+
+def test_pick_latest_move_prefers_newest_actual_over_future_estimates() -> None:
+    moves = [
+        MovementEvent(
+            name="Container Gated In (GTIN)",
+            location="PUERTO QUETZAL",
+            event_time=datetime(2026, 6, 4, 19, 0, tzinfo=timezone.utc),
+            event_state="estimated",
+        ),
+        MovementEvent(
+            name="Container Gated Out (GTOT)",
+            location="PUERTO QUETZAL",
+            event_time=datetime(2026, 6, 4, 13, 0, tzinfo=timezone.utc),
+            event_state="estimated",
+        ),
+        MovementEvent(
+            name="Transport Departed (DEPA)",
+            location="LAZARO CARDENAS",
+            event_time=datetime(2026, 5, 31, 23, 25, tzinfo=timezone.utc),
+            event_state="actual",
+        ),
+    ]
+
+    move = _pick_latest_move(moves)
+
+    assert move is not None
+    assert move.name == "Transport Departed (DEPA)"
+    assert move.location == "LAZARO CARDENAS"
+
+
+def test_extract_final_discharge_vessel_voyage_uses_final_pod_leg() -> None:
+    vessel_voyage = _extract_final_discharge_vessel_voyage(
+        [
+            {
+                "vesselEngName": "ONE SPLENDOUR",
+                "scheduleVoyageNumber": "2616",
+                "scheduleDirectionCode": "E",
+                "outboundConsortiumVoyage": "2616E",
+                "pod": {"locationCode": "MXLZC", "locationName": "LAZARO CARDENAS, MEXICO"},
+            },
+            {
+                "vesselEngName": "SAN ALFONSO",
+                "scheduleVoyageNumber": "2621",
+                "scheduleDirectionCode": "E",
+                "outboundConsortiumVoyage": "26021E",
+                "pod": {"locationCode": "GTPRQ", "locationName": "PUERTO QUETZAL, GUATEMALA"},
+            },
+        ],
+        {"pod": {"code": "GTPRQ", "locationName": "PUERTO QUETZAL"}},
+    )
+
+    assert vessel_voyage == "SAN ALFONSO 26021E"
+
+
+def test_plan_shipment_update_writes_vessel_voyage_field() -> None:
+    client = ClickUpClient(_settings(cf_vessel_voyage="vessel-voyage-field"))
+    shipment = ShipmentRef(
+        task_id="task-1",
+        task_name="Shipment 1",
+        shipping_line="one",
+        booking_no="BOOK-1",
+        container_no="CONT-1",
+        list_id="list-1",
+        current_field_values={"vessel-voyage-field": "ONE SPLENDOUR 2616E"},
+    )
+    status = ShipmentStatus(
+        status_text="ETA 2026-06-04",
+        eta_time=datetime(2026, 6, 4, 7, 0, tzinfo=timezone.utc),
+        vessel_voyage="SAN ALFONSO 26021E",
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+    updates = {update.label: update for update in plan.custom_field_updates}
+
+    assert updates["Vessel/Voyage"].field_id == "vessel-voyage-field"
+    assert updates["Vessel/Voyage"].value == "SAN ALFONSO 26021E"
+    assert plan.comment_text is not None
+    assert "Vessel/Voyage: SAN ALFONSO 26021E" in plan.comment_text
 
 
 def test_plan_shipment_update_writes_final_destination_discharge_on_multi_leg_route() -> None:

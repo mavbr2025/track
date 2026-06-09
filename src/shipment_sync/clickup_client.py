@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from pathlib import Path
+from datetime import date, datetime, timezone
 import re
 import sys
+import time
+import unicodedata
 from typing import Any
 
 import requests
@@ -33,6 +36,9 @@ class ClickUpClient:
                 "Content-Type": "application/json",
             }
         )
+        self._list_field_cache: dict[str, list[dict[str, Any]]] = {}
+        self._carrier_filter_warning_lists: set[str] = set()
+        self._discovery_warning_keys: set[str] = set()
 
     def list_shipments(self) -> list[ShipmentRef]:
         target_lists = self._resolve_target_lists()
@@ -44,7 +50,12 @@ class ClickUpClient:
 
         for idx, list_id in enumerate(target_lists.keys(), start=1):
             print(f"ClickUp list {idx}/{total_lists}: {list_id}", file=sys.stderr)
-            open_tasks = self._fetch_tasks(list_id=list_id, archived=False)
+            carrier_filter_value = self._shipping_line_filter_value_for_list(list_id)
+            open_tasks = self._fetch_tasks(
+                list_id=list_id,
+                archived=False,
+                carrier_filter_value=carrier_filter_value,
+            )
             for t in open_tasks:
                 if not _is_open_task(t):
                     continue
@@ -54,7 +65,11 @@ class ClickUpClient:
                     seen_task_ids.add(tid)
 
             if self.settings.clickup_include_archived:
-                archived_tasks = self._fetch_tasks(list_id=list_id, archived=True)
+                archived_tasks = self._fetch_tasks(
+                    list_id=list_id,
+                    archived=True,
+                    carrier_filter_value=carrier_filter_value,
+                )
                 for t in archived_tasks:
                     if not _is_open_task(t):
                         continue
@@ -108,6 +123,7 @@ class ClickUpClient:
                     list_name=list_name,
                     last_checked_at=last_checked_at,
                     current_status_value=current_status_value,
+                    current_task_status=_task_status_text(task),
                     track_trace_snapshot_hash=track_trace_snapshot_hash,
                     current_field_values={
                         field_id: field_payload.get("value")
@@ -121,16 +137,33 @@ class ClickUpClient:
     def _resolve_target_lists(self) -> dict[str, str]:
         target: dict[str, str] = {lid: None for lid in self.settings.clickup_list_ids}
 
+        for lid, name in self._resolve_discovered_lists().items():
+            target[lid] = name
+
+        return {k: (v or "") for k, v in target.items()}
+
+    def _resolve_discovered_lists(self) -> dict[str, str]:
+        has_space_discovery = self.settings.clickup_discover_from_spaces and (
+            self.settings.clickup_space_ids
+            or (self.settings.clickup_discover_from_team and self.settings.clickup_team_id)
+        )
+        if not self.settings.clickup_folder_ids and not has_space_discovery:
+            return {}
+
+        cached = self._load_discovery_cache(allow_stale=False)
+        if cached is not None:
+            print(f"Using cached ClickUp discovery list set ({len(cached)} list(s)).", file=sys.stderr)
+            return cached
+
+        discovered: dict[str, str] = {}
+
         for folder_id in self.settings.clickup_folder_ids:
             try:
                 folder_lists = self._fetch_folder_lists(folder_id)
             except requests.RequestException as exc:
                 self._warn_discovery_failure(f"folder {folder_id}", exc)
                 continue
-            for lst in folder_lists:
-                lid = str(lst.get("id") or "")
-                if lid:
-                    target[lid] = _name_or_none(lst.get("name"))
+            discovered.update(self._filter_discovered_lists(folder_lists, scope=f"folder {folder_id}"))
 
         discovered_space_ids: list[str] = []
         if self.settings.clickup_discover_from_team and self.settings.clickup_team_id:
@@ -148,10 +181,7 @@ class ClickUpClient:
                 except requests.RequestException as exc:
                     self._warn_discovery_failure(f"space {space_id}", exc)
                     continue
-                for lst in folderless_lists:
-                    lid = str(lst.get("id") or "")
-                    if lid:
-                        target[lid] = _name_or_none(lst.get("name"))
+                discovered.update(self._filter_discovered_lists(folderless_lists, scope=f"space {space_id}"))
                 try:
                     space_folders = self._fetch_space_folders(space_id)
                 except requests.RequestException as exc:
@@ -166,12 +196,139 @@ class ClickUpClient:
                     except requests.RequestException as exc:
                         self._warn_discovery_failure(f"folder {folder_id}", exc)
                         continue
-                    for lst in folder_lists:
-                        lid = str(lst.get("id") or "")
-                        if lid:
-                            target[lid] = _name_or_none(lst.get("name"))
+                    discovered.update(self._filter_discovered_lists(folder_lists, scope=f"folder {folder_id}"))
 
-        return {k: (v or "") for k, v in target.items()}
+        if not discovered:
+            stale = self._load_discovery_cache(allow_stale=True)
+            if stale is not None:
+                print(
+                    f"ClickUp discovery returned no eligible lists; using stale cached set ({len(stale)} list(s)).",
+                    file=sys.stderr,
+                )
+                return stale
+
+        self._write_discovery_cache(discovered)
+        return discovered
+
+    def _filter_discovered_lists(self, lists: list[dict[str, Any]], *, scope: str) -> dict[str, str]:
+        eligible: dict[str, str] = {}
+        for lst in lists:
+            lid = str(lst.get("id") or "")
+            if not lid:
+                continue
+            name = _name_or_none(lst.get("name")) or ""
+            if not self._discovered_list_name_allowed(name):
+                self._warn_discovery_skip_once(
+                    f"name:{lid}",
+                    f"ClickUp discovery skipped list {lid} ({name or 'unnamed'}) from {scope}: name filter did not match.",
+                )
+                continue
+            if self.settings.clickup_discovery_validate_schema and not self._list_has_tracking_schema(lid):
+                self._warn_discovery_skip_once(
+                    f"schema:{lid}",
+                    f"ClickUp discovery skipped list {lid} ({name or 'unnamed'}) from {scope}: missing T&T fields.",
+                )
+                continue
+            self._warn_discovery_skip_once(
+                f"accepted:{lid}",
+                f"ClickUp discovery accepted list {lid} ({name or 'unnamed'}) from {scope}.",
+            )
+            eligible[lid] = name
+        return eligible
+
+    def _discovered_list_name_allowed(self, name: str) -> bool:
+        normalized_name = _normalize_discovery_label(name)
+        excluded = self.settings.clickup_discovery_list_name_exclude or []
+        for pattern in excluded:
+            normalized_pattern = _normalize_discovery_label(pattern)
+            if normalized_pattern and normalized_pattern in normalized_name:
+                return False
+
+        included = self.settings.clickup_discovery_list_name_include or []
+        if not included:
+            return True
+        return any(
+            normalized_pattern in normalized_name
+            for pattern in included
+            if (normalized_pattern := _normalize_discovery_label(pattern))
+        )
+
+    def _list_has_tracking_schema(self, list_id: str) -> bool:
+        required_field_ids = [
+            self.settings.cf_container_no,
+            self.settings.cf_booking_no,
+            self.settings.cf_shipping_line,
+        ]
+        if self.settings.cf_status_last_checked:
+            required_field_ids.append(self.settings.cf_status_last_checked)
+        required = {field_id for field_id in required_field_ids if field_id}
+        if not required:
+            return True
+        try:
+            fields = self._fetch_list_fields(list_id)
+        except requests.RequestException as exc:
+            self._warn_discovery_failure(f"list fields {list_id}", exc)
+            return False
+        available = {str(field.get("id") or "") for field in fields if isinstance(field, dict)}
+        return required.issubset(available)
+
+    def _load_discovery_cache(self, *, allow_stale: bool) -> dict[str, str] | None:
+        path_value = self.settings.clickup_discovery_cache_path
+        ttl_seconds = self.settings.clickup_discovery_cache_ttl_seconds
+        if not path_value or ttl_seconds <= 0:
+            return None
+        path = Path(path_value)
+        try:
+            payload = json.loads(path.read_text())
+        except FileNotFoundError:
+            return None
+        except Exception as exc:
+            self._warn_discovery_skip_once(
+                "cache-read",
+                f"ClickUp discovery cache ignored: {exc}.",
+            )
+            return None
+
+        generated_at = payload.get("generated_at")
+        lists = payload.get("lists")
+        if not isinstance(generated_at, (int, float)) or not isinstance(lists, list):
+            return None
+        if not allow_stale and (time.time() - float(generated_at)) > ttl_seconds:
+            return None
+
+        resolved: dict[str, str] = {}
+        for item in lists:
+            if not isinstance(item, dict):
+                continue
+            lid = str(item.get("id") or "")
+            if not lid:
+                continue
+            resolved[lid] = _name_or_none(item.get("name")) or ""
+        return resolved
+
+    def _write_discovery_cache(self, lists: dict[str, str]) -> None:
+        path_value = self.settings.clickup_discovery_cache_path
+        if not path_value or self.settings.clickup_discovery_cache_ttl_seconds <= 0:
+            return
+        path = Path(path_value)
+        payload = {
+            "generated_at": time.time(),
+            "lists": [{"id": lid, "name": name} for lid, name in sorted(lists.items())],
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        except Exception as exc:
+            self._warn_discovery_skip_once(
+                "cache-write",
+                f"ClickUp discovery cache write failed: {exc}.",
+            )
+
+    def _warn_discovery_skip_once(self, key: str, message: str) -> None:
+        if key in self._discovery_warning_keys:
+            return
+        self._discovery_warning_keys.add(key)
+        print(message, file=sys.stderr)
 
     def _warn_discovery_failure(self, scope: str, exc: requests.RequestException) -> None:
         print(
@@ -211,13 +368,57 @@ class ClickUpClient:
         response.raise_for_status()
         return response.json().get("lists", [])
 
-    def _fetch_tasks(self, list_id: str, archived: bool) -> list[dict[str, Any]]:
+    def _fetch_tasks(
+        self,
+        list_id: str,
+        archived: bool,
+        carrier_filter_value: str | int | None = None,
+    ) -> list[dict[str, Any]]:
+        try:
+            return self._fetch_tasks_page_loop(
+                list_id=list_id,
+                archived=archived,
+                carrier_filter_value=carrier_filter_value,
+            )
+        except requests.RequestException as exc:
+            if carrier_filter_value is None:
+                raise
+            if list_id not in self._carrier_filter_warning_lists:
+                print(
+                    f"ClickUp carrier prefilter failed for list {list_id}: {exc}. "
+                    "Retrying without the API-side carrier filter.",
+                    file=sys.stderr,
+                )
+                self._carrier_filter_warning_lists.add(list_id)
+            return self._fetch_tasks_page_loop(
+                list_id=list_id,
+                archived=archived,
+                carrier_filter_value=None,
+            )
+
+    def _fetch_tasks_page_loop(
+        self,
+        *,
+        list_id: str,
+        archived: bool,
+        carrier_filter_value: str | int | None,
+    ) -> list[dict[str, Any]]:
         url = f"{self.base_url}/list/{list_id}/task"
         base_params = {
             "archived": "true" if archived else "false",
             "subtasks": "true",
             "include_closed": "false",
         }
+        if carrier_filter_value is not None:
+            base_params["custom_fields"] = json.dumps(
+                [
+                    {
+                        "field_id": self.settings.cf_shipping_line,
+                        "operator": "=",
+                        "value": carrier_filter_value,
+                    }
+                ]
+            )
         all_tasks: list[dict[str, Any]] = []
         page = 0
         while True:
@@ -234,6 +435,66 @@ class ClickUpClient:
                 break
             page += 1
         return all_tasks
+
+    def _shipping_line_filter_value_for_list(self, list_id: str) -> str | int | None:
+        allowed_lines = self.settings.shipment_allowed_lines or []
+        if len(allowed_lines) != 1:
+            return None
+
+        carrier_name = allowed_lines[0]
+        try:
+            fields = self._fetch_list_fields(list_id)
+        except requests.RequestException as exc:
+            if list_id not in self._carrier_filter_warning_lists:
+                print(
+                    f"ClickUp carrier prefilter skipped for list {list_id}: {exc}. "
+                    "Continuing without the API-side carrier filter.",
+                    file=sys.stderr,
+                )
+                self._carrier_filter_warning_lists.add(list_id)
+            return None
+
+        shipping_line_field = next(
+            (field for field in fields if field.get("id") == self.settings.cf_shipping_line),
+            None,
+        )
+        if not isinstance(shipping_line_field, dict):
+            return None
+
+        type_config = shipping_line_field.get("type_config")
+        options = type_config.get("options") if isinstance(type_config, dict) else None
+        if not isinstance(options, list):
+            return None
+
+        wanted = _normalize_carrier_filter_label(carrier_name)
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            option_name = option.get("name")
+            if not isinstance(option_name, str):
+                continue
+            if _normalize_carrier_filter_label(option_name) != wanted:
+                continue
+            option_id = option.get("id")
+            if option_id is not None:
+                return str(option_id)
+            orderindex = option.get("orderindex")
+            if orderindex is not None:
+                return orderindex
+        return None
+
+    def _fetch_list_fields(self, list_id: str) -> list[dict[str, Any]]:
+        cached = self._list_field_cache.get(list_id)
+        if cached is not None:
+            return cached
+        url = f"{self.base_url}/list/{list_id}/field"
+        response = self.session.get(url, timeout=30)
+        response.raise_for_status()
+        fields = response.json().get("fields", [])
+        if not isinstance(fields, list):
+            fields = []
+        self._list_field_cache[list_id] = fields
+        return fields
 
     def plan_shipment_update(self, shipment: ShipmentRef, status: ShipmentStatus) -> ShipmentUpdatePlan:
         now_utc = datetime.now(timezone.utc)
@@ -294,6 +555,15 @@ class ClickUpClient:
         )
         if container_update is not None:
             candidate_field_updates.append(container_update)
+        if self.settings.cf_vessel_voyage and status.vessel_voyage:
+            candidate_field_updates.append(
+                ShipmentFieldWrite(
+                    field_id=self.settings.cf_vessel_voyage,
+                    value=status.vessel_voyage,
+                    field_type="text",
+                    label="Vessel/Voyage",
+                )
+            )
         candidate_field_updates.extend(_build_direct_event_field_updates(status=status, settings=self.settings))
         candidate_field_updates = _dedupe_field_updates(candidate_field_updates)
         changed_field_updates = [
@@ -301,8 +571,16 @@ class ClickUpClient:
             for update in candidate_field_updates
             if _field_value_changed(update, shipment.current_field_values.get(update.field_id))
         ]
+        task_status_update = _build_task_status_update(
+            shipment=shipment,
+            status=status,
+            settings=self.settings,
+            candidate_field_updates=candidate_field_updates,
+            now_utc=now_utc,
+        )
         custom_field_updates = _dedupe_field_updates(always_field_updates + changed_field_updates)
         fields_changed = bool(changed_field_updates)
+        plan_changed = fields_changed or task_status_update is not None
 
         if self.settings.recent_moves_limit > 0:
             recent_moves = status.recent_moves[: self.settings.recent_moves_limit]
@@ -319,6 +597,8 @@ class ClickUpClient:
             ]
             if source_link:
                 comment_lines.append(f"Carrier source: {source_link}")
+            if status.vessel_voyage:
+                comment_lines.append(f"Vessel/Voyage: {status.vessel_voyage}")
             if recent_moves:
                 comment_lines.append(recent_moves_label)
                 for idx, move in enumerate(recent_moves, start=1):
@@ -350,6 +630,8 @@ class ClickUpClient:
                 comment_lines.append(f"Event time (UTC): {status.event_time.isoformat()}")
             if status.movement_details:
                 comment_lines.append(f"Last movement details: {status.movement_details}")
+            if status.vessel_voyage:
+                comment_lines.append(f"Vessel/Voyage: {status.vessel_voyage}")
             if recent_moves:
                 comment_lines.append(recent_moves_label)
                 for idx, move in enumerate(recent_moves, start=1):
@@ -359,7 +641,19 @@ class ClickUpClient:
             if status.raw_source:
                 comment_lines.append(f"Source trace: {status.raw_source}")
 
-        if not fields_changed and self.settings.shipment_comment_on_no_change:
+        if task_status_update:
+            current_label = shipment.current_task_status or "unknown"
+            comment_lines.append(f"Task status: {current_label} -> {task_status_update}")
+
+        if not fields_changed and task_status_update and not self.settings.shipment_comment_on_no_change:
+            comment_text = "\n".join(
+                [
+                    f"{self.settings.status_comment_prefix}: Workflow status update",
+                    f"Task status: {shipment.current_task_status or 'unknown'} -> {task_status_update}",
+                    f"Last checked (UTC): {last_checked_display}",
+                ]
+            )
+        elif not fields_changed and self.settings.shipment_comment_on_no_change:
             no_change_lines = [
                 f"{self.settings.status_comment_prefix}: No change found",
                 f"T&T executed on {last_checked_display}",
@@ -373,13 +667,11 @@ class ClickUpClient:
             comment_text = None
 
         return ShipmentUpdatePlan(
-            changed=fields_changed,
+            changed=plan_changed,
             status_value=status_value,
             snapshot_hash=snapshot_hash,
             custom_field_updates=custom_field_updates,
-            task_status_update=self.settings.clickup_task_status_on_update
-            if fields_changed and self.settings.clickup_use_task_status and self.settings.clickup_task_status_on_update
-            else None,
+            task_status_update=task_status_update,
             comment_text=comment_text,
         )
 
@@ -534,6 +826,125 @@ def _build_container_field_update(
         field_type="text",
         label="Container",
     )
+
+
+def _build_task_status_update(
+    *,
+    shipment: ShipmentRef,
+    status: ShipmentStatus,
+    settings: Settings,
+    candidate_field_updates: list[ShipmentFieldWrite],
+    now_utc: datetime,
+) -> str | None:
+    if not settings.clickup_use_task_status:
+        return None
+
+    current_status = shipment.current_task_status
+    if not current_status:
+        return None
+
+    sequence = _operational_status_sequence(settings)
+    normalized_to_index = {
+        _normalize_workflow_status_name(name): idx for idx, name in enumerate(sequence)
+    }
+    current_index = normalized_to_index.get(_normalize_workflow_status_name(current_status))
+    if current_index is None:
+        return None
+    terminal_index = normalized_to_index.get(
+        _normalize_workflow_status_name(settings.clickup_status_empty_returned)
+    )
+    if terminal_index is not None and current_index >= terminal_index:
+        return None
+
+    effective_values = dict(shipment.current_field_values)
+    for update in candidate_field_updates:
+        effective_values[update.field_id] = update.value
+
+    target_index = _derive_operational_status_index(
+        shipment=shipment,
+        status=status,
+        settings=settings,
+        field_values=effective_values,
+        current_index=current_index,
+        now_utc=now_utc,
+    )
+    if target_index is None or target_index <= current_index:
+        return None
+
+    return sequence[target_index]
+
+
+def _operational_status_sequence(settings: Settings) -> list[str]:
+    return [
+        settings.clickup_status_pending_booking,
+        settings.clickup_status_booking_confirmed,
+        settings.clickup_status_collected,
+        settings.clickup_status_origin_port,
+        settings.clickup_status_in_transit,
+        settings.clickup_status_arriving,
+        settings.clickup_status_arrived_port,
+        settings.clickup_status_en_route_warehouse,
+        settings.clickup_status_in_warehouse,
+        settings.clickup_status_empty_returned,
+    ]
+
+
+def _derive_operational_status_index(
+    *,
+    shipment: ShipmentRef,
+    status: ShipmentStatus,
+    settings: Settings,
+    field_values: dict[str, Any],
+    current_index: int,
+    now_utc: datetime,
+) -> int | None:
+    today = now_utc.date()
+    carrier_set = bool((shipment.shipping_line or "").strip())
+    booking_set = bool((shipment.booking_no or "").strip())
+
+    eta_date = _field_date(settings.cf_eta, field_values)
+    if eta_date is None and status.eta_time is not None:
+        eta_date = status.eta_time.astimezone(timezone.utc).date()
+
+    etd_date = _field_date(settings.cf_etd, field_values)
+    gate_out_empty_date = _field_date(settings.cf_gate_out_empty, field_values)
+    gate_in_full_date = _field_date(settings.cf_gate_in_full, field_values)
+    gate_out_delivery_date = _field_date(settings.cf_gate_out_delivery, field_values)
+    gate_in_empty_date = _field_date(settings.cf_gate_in_empty, field_values)
+
+    target_index: int | None = None
+
+    if carrier_set and booking_set and etd_date is not None and eta_date is not None:
+        target_index = 1
+
+    if gate_out_empty_date is not None and gate_in_full_date is None:
+        target_index = max(target_index or 0, 2)
+
+    if gate_out_empty_date is not None and gate_in_full_date is not None and etd_date is not None:
+        if etd_date > today:
+            target_index = max(target_index or 0, 3)
+        elif eta_date is not None and eta_date > today:
+            target_index = max(target_index or 0, 4)
+            days_until_eta = (eta_date - today).days
+            if 5 <= days_until_eta <= 10:
+                target_index = max(target_index, 5)
+
+    if gate_out_delivery_date is not None and (target_index is not None and target_index >= 6 or current_index >= 6):
+        target_index = max(target_index or 0, 7)
+
+    if gate_in_empty_date is not None and gate_in_empty_date <= today and (target_index is not None and target_index >= 7 or current_index >= 7):
+        target_index = max(target_index or 0, 9)
+
+    return target_index
+
+
+def _field_date(field_id: str | None, values: dict[str, Any]) -> date | None:
+    if not field_id:
+        return None
+    parsed = _parse_datetime_value(values.get(field_id))
+    if parsed is None:
+        return None
+    return parsed.astimezone(timezone.utc).date()
 
 
 def _build_move_field_updates(
@@ -779,6 +1190,24 @@ def _is_open_task(task: dict[str, Any]) -> bool:
     return True
 
 
+def _task_status_text(task: dict[str, Any]) -> str | None:
+    status_obj = task.get("status")
+    if isinstance(status_obj, dict):
+        for key in ("status", "name", "label"):
+            value = status_obj.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    if isinstance(status_obj, str) and status_obj.strip():
+        return status_obj.strip()
+    return None
+
+
+def _normalize_workflow_status_name(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value)
+    ascii_text = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", "", ascii_text.lower())
+
+
 def _field_text(field: dict[str, Any] | None) -> str | None:
     if not field:
         return None
@@ -946,6 +1375,16 @@ def _resolve_option_name(field: dict[str, Any], raw_value: str | int | float) ->
     return None
 
 
+def _normalize_carrier_filter_label(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
+
+
+def _normalize_discovery_label(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value or "")
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", ascii_text.strip().lower())
+
+
 def _name_or_none(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -979,6 +1418,7 @@ def _compute_snapshot_hash(
         "location": status.location or "",
         "event_time": status.event_time.isoformat() if status.event_time else "",
         "movement_details": status.movement_details or "",
+        "vessel_voyage": status.vessel_voyage or "",
         "latest_move_name": latest_move.name if latest_move else "",
         "latest_move_location": latest_move.location if latest_move else "",
         "latest_move_time": _format_port_local_time(

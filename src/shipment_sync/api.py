@@ -13,13 +13,18 @@ import uvicorn
 
 from shipment_sync.ap_config import AccountsPayableSettings
 from shipment_sync.ap_models import AccountsPayableInvoice
+from shipment_sync.audit import AuditRun, SyncAuditStore
 from shipment_sync.clickup_ap_client import ClickUpAccountsPayableClient
 from shipment_sync.clickup_client import ClickUpClient
+from shipment_sync.clickup_pricing_client import ClickUpPricingClient
 from shipment_sync.config import Settings
+from shipment_sync.document_routes import register_document_routes
 from shipment_sync.models import ShipmentRef
 from shipment_sync.one_booking_client import OneBookingClient
 from shipment_sync.one_booking_config import OneBookingConfigReport, OneBookingSettings
 from shipment_sync.one_booking_models import OneBookingResult
+from shipment_sync.pricing_sync import find_quote_for_shipment, run_bulk_pricing_sync, sync_pricing_pair
+from shipment_sync.pricing_sync_config import PricingSyncSettings
 from shipment_sync.track_trace_config import ApiTriggerSettings, TrackTraceConfigReport, inspect_track_trace_env
 from shipment_sync.sync import SyncStats, UpdatedShipment, run_sync
 
@@ -61,6 +66,7 @@ class UpdatedShipmentResponse(BaseModel):
     latest_move_location: str | None
     latest_move_time_local_text: str | None
     movement_details: str | None
+    vessel_voyage: str | None
     list_id: str
     list_name: str | None
 
@@ -97,6 +103,46 @@ class ListAccountsPayableInvoicesResponse(BaseModel):
     returned: int
     has_invoices: bool
     items: list[AccountsPayableInvoiceResponse]
+
+
+class PricingFieldUpdateResponse(BaseModel):
+    field_id: str
+    field_name: str
+    value: Any
+    source_value: Any
+    existing_value: Any
+    transform: str | None
+
+
+class PricingSyncResultResponse(BaseModel):
+    shipment_task_id: str | None
+    shipment_custom_id: str | None
+    shipment_name: str | None
+    quote_task_id: str | None
+    quote_custom_id: str | None
+    quote_name: str | None
+    match_selector: str | None = None
+    match_value: str | None = None
+    dry_run: bool
+    applied_updates: int
+    updates: list[PricingFieldUpdateResponse]
+    skip_reason: str | None = None
+
+
+class PricingSyncResponse(BaseModel):
+    mode: str
+    shipments_matched: int
+    shipments_updated: int
+    shipments_skipped: int
+    results: list[PricingSyncResultResponse]
+
+
+class PricingSyncRequest(BaseModel):
+    shipment: str | None = None
+    quote: str | None = None
+    sync_linked_shipments: bool = False
+    overwrite_existing: bool = False
+    dry_run: bool = False
 
 
 class OneBookingRequestBody(BaseModel):
@@ -141,12 +187,39 @@ class TrackTraceRunRequest(BaseModel):
     payload: dict[str, Any] | None = None
 
 
+class AuditRunResponse(BaseModel):
+    id: str
+    source: str | None
+    started_at: str
+    finished_at: str | None
+    status: str
+    host: str | None
+    allowed_lines: list[str]
+    total_candidates: int | None
+    updated: int | None
+    unchanged: int | None
+    skipped: int | None
+    error: str | None
+
+
+class AuditRunsResponse(BaseModel):
+    count: int
+    items: list[AuditRunResponse]
+
+
+class AuditRunDetailResponse(BaseModel):
+    run: dict[str, Any]
+    task_events: list[dict[str, Any]]
+    log_entries: list[dict[str, Any]]
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Shipment Sync API",
         version="0.1.0",
         description="HTTP API for previewing ClickUp shipment tasks and running shipment sync jobs.",
     )
+    register_document_routes(app)
 
     @app.get("/", include_in_schema=False)
     def root() -> dict[str, str]:
@@ -221,6 +294,35 @@ def create_app() -> FastAPI:
             raise _service_error(exc) from exc
         return _serialize_sync_stats(stats)
 
+    @app.get("/audit/runs", response_model=AuditRunsResponse)
+    def list_audit_runs(
+        store: Annotated[SyncAuditStore, Depends(_get_audit_store)],
+        _: None = Depends(_require_operator_auth),
+        limit: int = 50,
+    ) -> AuditRunsResponse:
+        runs = store.list_runs(limit=limit)
+        return AuditRunsResponse(
+            count=len(runs),
+            items=[_serialize_audit_run(run) for run in runs],
+        )
+
+    @app.get("/audit/runs/{run_id}", response_model=AuditRunDetailResponse)
+    def get_audit_run(
+        run_id: str,
+        store: Annotated[SyncAuditStore, Depends(_get_audit_store)],
+        _: None = Depends(_require_operator_auth),
+        task_limit: int = 500,
+        log_limit: int = 500,
+    ) -> AuditRunDetailResponse:
+        run = store.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Audit run not found")
+        return AuditRunDetailResponse(
+            run=run,
+            task_events=store.list_task_events(run_id=run_id, limit=task_limit),
+            log_entries=store.list_log_entries(run_id=run_id, limit=log_limit),
+        )
+
     @app.get("/ap/health", response_model=HealthResponse)
     def ap_health() -> HealthResponse:
         load_dotenv()
@@ -250,6 +352,101 @@ def create_app() -> FastAPI:
             returned=len(visible),
             has_invoices=bool(invoices),
             items=[_serialize_ap_invoice(item) for item in visible],
+        )
+
+    @app.get("/pricing/health", response_model=HealthResponse)
+    def pricing_health() -> HealthResponse:
+        load_dotenv()
+        try:
+            settings = PricingSyncSettings.from_env()
+        except ValueError as exc:
+            return HealthResponse(status="ok", configured=False, detail=str(exc))
+
+        detail_parts: list[str] = []
+        if not settings.clickup_shipment_list_ids:
+            detail_parts.append("Bulk sync missing CLICKUP_LIST_ID or CLICKUP_LIST_IDS")
+        if not settings.clickup_pricing_list_ids:
+            detail_parts.append("Bulk sync missing CLICKUP_PRICING_LIST_ID or CLICKUP_PRICING_LIST_IDS")
+        detail = " | ".join(detail_parts) if detail_parts else None
+        return HealthResponse(status="ok", configured=True, detail=detail)
+
+    @app.post("/pricing/sync", response_model=PricingSyncResponse)
+    def sync_pricing(
+        body: PricingSyncRequest,
+        settings: Annotated[PricingSyncSettings, Depends(_get_pricing_settings)],
+        client: Annotated[ClickUpPricingClient, Depends(_get_pricing_client)],
+        _: None = Depends(_require_operator_auth),
+    ) -> PricingSyncResponse:
+        overwrite_existing = body.overwrite_existing or not settings.clickup_pricing_only_empty_targets
+
+        if body.sync_linked_shipments:
+            if body.shipment or body.quote:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Use either sync_linked_shipments or an explicit shipment/quote pair.",
+                )
+            try:
+                summary = run_bulk_pricing_sync(
+                    client,
+                    settings,
+                    dry_run=body.dry_run,
+                    overwrite_existing=overwrite_existing,
+                )
+            except requests.RequestException as exc:
+                raise _service_error(exc) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            return PricingSyncResponse(
+                mode="bulk",
+                shipments_matched=summary["shipments_matched"],
+                shipments_updated=summary["shipments_updated"],
+                shipments_skipped=summary["shipments_skipped"],
+                results=[_serialize_pricing_sync_result(item) for item in summary["results"]],
+            )
+
+        if not body.shipment:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide shipment, optionally quote, or set sync_linked_shipments=true.",
+            )
+
+        try:
+            shipment_task = client.get_task(body.shipment)
+            matched_on: str | None = None
+            matched_value: str | None = None
+            if body.quote:
+                quote_task = client.get_task(body.quote)
+            else:
+                quote_task, matched_on, matched_value = find_quote_for_shipment(
+                    client,
+                    settings,
+                    shipment_task=shipment_task,
+                )
+                if quote_task is None:
+                    if matched_on and matched_value is None:
+                        raise HTTPException(status_code=404, detail=f"Could not discover quote via {matched_on}.")
+                    raise HTTPException(status_code=404, detail="Could not discover quote for shipment.")
+            result = sync_pricing_pair(
+                client,
+                settings,
+                shipment_task=shipment_task,
+                quote_task=quote_task,
+                dry_run=body.dry_run,
+                overwrite_existing=overwrite_existing,
+            )
+            if not body.quote:
+                result["match_selector"] = matched_on
+                result["match_value"] = matched_value
+        except requests.RequestException as exc:
+            raise _service_error(exc) from exc
+
+        return PricingSyncResponse(
+            mode="pair",
+            shipments_matched=1,
+            shipments_updated=1 if result["applied_updates"] > 0 else 0,
+            shipments_skipped=0,
+            results=[_serialize_pricing_sync_result(result)],
         )
 
     @app.get("/one/health", response_model=HealthResponse)
@@ -331,6 +528,20 @@ def _get_ap_client() -> ClickUpAccountsPayableClient:
     return ClickUpAccountsPayableClient(settings)
 
 
+def _get_pricing_settings() -> PricingSyncSettings:
+    load_dotenv()
+    try:
+        return PricingSyncSettings.from_env()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _get_pricing_client(
+    settings: Annotated[PricingSyncSettings, Depends(_get_pricing_settings)],
+) -> ClickUpPricingClient:
+    return ClickUpPricingClient(settings)
+
+
 def _get_one_booking_client() -> OneBookingClient:
     load_dotenv()
     try:
@@ -338,6 +549,20 @@ def _get_one_booking_client() -> OneBookingClient:
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return OneBookingClient(settings)
+
+
+def _get_audit_store() -> SyncAuditStore:
+    load_dotenv()
+    try:
+        settings = Settings.from_env()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not settings.shipment_audit_db_path:
+        raise HTTPException(status_code=503, detail="SHIPMENT_AUDIT_DB_PATH is not configured")
+    try:
+        return SyncAuditStore(settings.shipment_audit_db_path)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Audit database unavailable: {exc}") from exc
 
 
 def _require_operator_auth(
@@ -391,6 +616,7 @@ def _serialize_updated_shipment(item: UpdatedShipment) -> UpdatedShipmentRespons
         latest_move_location=item.latest_move_location,
         latest_move_time_local_text=item.latest_move_time_local_text,
         movement_details=item.movement_details,
+        vessel_voyage=item.vessel_voyage,
         list_id=item.list_id,
         list_name=item.list_name,
     )
@@ -424,6 +650,34 @@ def _serialize_ap_invoice(item: AccountsPayableInvoice) -> AccountsPayableInvoic
         list_name=item.list_name,
         is_closed=item.is_closed,
         is_archived=item.is_archived,
+    )
+
+
+def _serialize_pricing_sync_result(item: dict[str, Any]) -> PricingSyncResultResponse:
+    return PricingSyncResultResponse(
+        shipment_task_id=item.get("shipment_task_id"),
+        shipment_custom_id=item.get("shipment_custom_id"),
+        shipment_name=item.get("shipment_name"),
+        quote_task_id=item.get("quote_task_id"),
+        quote_custom_id=item.get("quote_custom_id"),
+        quote_name=item.get("quote_name"),
+        match_selector=item.get("match_selector"),
+        match_value=item.get("match_value"),
+        dry_run=bool(item.get("dry_run")),
+        applied_updates=int(item.get("applied_updates") or 0),
+        updates=[
+            PricingFieldUpdateResponse(
+                field_id=str(update.get("field_id") or ""),
+                field_name=str(update.get("field_name") or ""),
+                value=update.get("value"),
+                source_value=update.get("source_value"),
+                existing_value=update.get("existing_value"),
+                transform=update.get("transform"),
+            )
+            for update in item.get("updates", [])
+            if isinstance(update, dict)
+        ],
+        skip_reason=item.get("skip_reason"),
     )
 
 
@@ -462,6 +716,23 @@ def _serialize_track_trace_config_report(item: TrackTraceConfigReport) -> TrackT
         recommended_items=item.recommended_items,
         missing_recommended_items=item.missing_recommended_items,
         notes=item.notes,
+    )
+
+
+def _serialize_audit_run(item: AuditRun) -> AuditRunResponse:
+    return AuditRunResponse(
+        id=item.id,
+        source=item.source,
+        started_at=item.started_at,
+        finished_at=item.finished_at,
+        status=item.status,
+        host=item.host,
+        allowed_lines=item.allowed_lines,
+        total_candidates=item.total_candidates,
+        updated=item.updated,
+        unchanged=item.unchanged,
+        skipped=item.skipped,
+        error=item.error,
     )
 
 

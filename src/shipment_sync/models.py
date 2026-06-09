@@ -14,6 +14,7 @@ class ShipmentRef:
     list_name: str | None = None
     last_checked_at: datetime | None = None
     current_status_value: str | None = None
+    current_task_status: str | None = None
     track_trace_snapshot_hash: str | None = None
     current_field_values: dict[str, Any] = field(default_factory=dict)
 
@@ -31,6 +32,7 @@ class ShipmentStatus:
     raw_source: str | None = None
     source_url: str | None = None
     movement_details: str | None = None
+    vessel_voyage: str | None = None
 
 
 @dataclass

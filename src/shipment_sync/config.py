@@ -29,10 +29,21 @@ class Settings:
     cf_gate_out_empty: str | None
     cf_gate_out_delivery: str | None
     cf_gate_in_empty: str | None
+    cf_vessel_voyage: str | None = None
     clickup_include_closed: bool = False
     clickup_include_archived: bool = False
     clickup_use_task_status: bool = False
     clickup_task_status_on_update: str | None = None
+    clickup_status_pending_booking: str = "Pendiente de booking"
+    clickup_status_booking_confirmed: str = "BK confirmado"
+    clickup_status_collected: str = "Recolectado"
+    clickup_status_origin_port: str = "En puerto Origen"
+    clickup_status_in_transit: str = "Tránsito"
+    clickup_status_arriving: str = "Por arribar"
+    clickup_status_arrived_port: str = "arribado en puerto"
+    clickup_status_en_route_warehouse: str = "en ruta a almacén"
+    clickup_status_in_warehouse: str = "en almacén"
+    clickup_status_empty_returned: str = "Vacío devuelto"
     status_comment_prefix: str = "Shipment update"
     eta_only_mode: bool = True
     recent_moves_limit: int = 0
@@ -43,6 +54,13 @@ class Settings:
     shipment_preflight_timeout_seconds: int = 8
     shipment_min_sync_interval_hours: int = 0
     shipment_comment_on_no_change: bool = False
+    shipment_audit_db_path: str | None = None
+    shipment_audit_source: str | None = None
+    clickup_discovery_validate_schema: bool = True
+    clickup_discovery_list_name_include: list[str] | None = None
+    clickup_discovery_list_name_exclude: list[str] | None = None
+    clickup_discovery_cache_path: str | None = None
+    clickup_discovery_cache_ttl_seconds: int = 86400
 
     @property
     def clickup_auth_header_value(self) -> str:
@@ -97,6 +115,18 @@ class Settings:
             clickup_folder_ids=_csv("CLICKUP_FOLDER_IDS"),
             clickup_discover_from_spaces=_bool("CLICKUP_DISCOVER_LISTS_FROM_SPACES", default=True),
             clickup_discover_from_team=_bool("CLICKUP_DISCOVER_LISTS_FROM_TEAM", default=False),
+            clickup_discovery_validate_schema=_bool("CLICKUP_DISCOVERY_VALIDATE_SCHEMA", default=True),
+            clickup_discovery_list_name_include=_csv_optional(
+                "CLICKUP_DISCOVERY_LIST_NAME_INCLUDE",
+                default=["shipment"],
+            ),
+            clickup_discovery_list_name_exclude=_csv_optional("CLICKUP_DISCOVERY_LIST_NAME_EXCLUDE"),
+            clickup_discovery_cache_path=_optional("CLICKUP_DISCOVERY_CACHE_PATH"),
+            clickup_discovery_cache_ttl_seconds=_int(
+                "CLICKUP_DISCOVERY_CACHE_TTL_SECONDS",
+                default=86400,
+                min_value=0,
+            ),
             cf_container_no=_must("CLICKUP_CF_CONTAINER_NO"),
             cf_booking_no=_must("CLICKUP_CF_BOOKING_NO"),
             cf_shipping_line=_must("CLICKUP_CF_SHIPPING_LINE"),
@@ -110,10 +140,21 @@ class Settings:
             cf_gate_out_empty=_optional("CLICKUP_CF_GATE_OUT_EMPTY"),
             cf_gate_out_delivery=_optional("CLICKUP_CF_GATE_OUT_DELIVERY"),
             cf_gate_in_empty=_optional("CLICKUP_CF_GATE_IN_EMPTY"),
+            cf_vessel_voyage=_optional("CLICKUP_CF_VESSEL_VOYAGE"),
             clickup_include_closed=_bool("CLICKUP_INCLUDE_CLOSED", default=False),
             clickup_include_archived=_bool("CLICKUP_INCLUDE_ARCHIVED", default=False),
             clickup_use_task_status=_bool("CLICKUP_USE_TASK_STATUS", default=False),
             clickup_task_status_on_update=_optional("CLICKUP_TASK_STATUS_ON_UPDATE"),
+            clickup_status_pending_booking=os.getenv("CLICKUP_STATUS_PENDING_BOOKING", "Pendiente de booking"),
+            clickup_status_booking_confirmed=os.getenv("CLICKUP_STATUS_BOOKING_CONFIRMED", "BK confirmado"),
+            clickup_status_collected=os.getenv("CLICKUP_STATUS_COLLECTED", "Recolectado"),
+            clickup_status_origin_port=os.getenv("CLICKUP_STATUS_ORIGIN_PORT", "En puerto Origen"),
+            clickup_status_in_transit=os.getenv("CLICKUP_STATUS_IN_TRANSIT", "Tránsito"),
+            clickup_status_arriving=os.getenv("CLICKUP_STATUS_ARRIVING", "Por arribar"),
+            clickup_status_arrived_port=os.getenv("CLICKUP_STATUS_ARRIVED_PORT", "arribado en puerto"),
+            clickup_status_en_route_warehouse=os.getenv("CLICKUP_STATUS_EN_ROUTE_WAREHOUSE", "en ruta a almacén"),
+            clickup_status_in_warehouse=os.getenv("CLICKUP_STATUS_IN_WAREHOUSE", "en almacén"),
+            clickup_status_empty_returned=os.getenv("CLICKUP_STATUS_EMPTY_RETURNED", "Vacío devuelto"),
             status_comment_prefix=os.getenv("CLICKUP_STATUS_COMMENT_PREFIX", "Shipment update"),
             eta_only_mode=_bool("SHIPMENT_ETA_ONLY", default=True),
             recent_moves_limit=_int("SHIPMENT_RECENT_MOVES_LIMIT", default=0, min_value=0),
@@ -124,6 +165,8 @@ class Settings:
             shipment_preflight_timeout_seconds=_int("SHIPMENT_PREFLIGHT_TIMEOUT_SECONDS", default=8, min_value=1),
             shipment_min_sync_interval_hours=_int("SHIPMENT_MIN_SYNC_INTERVAL_HOURS", default=0, min_value=0),
             shipment_comment_on_no_change=_bool("SHIPMENT_COMMENT_ON_NO_CHANGE", default=False),
+            shipment_audit_db_path=_optional("SHIPMENT_AUDIT_DB_PATH"),
+            shipment_audit_source=_optional("SHIPMENT_AUDIT_SOURCE"),
         )
 
 
@@ -145,6 +188,13 @@ def _optional(key: str) -> str | None:
 def _csv(key: str) -> list[str]:
     value = os.getenv(key, "")
     return [x.strip() for x in value.split(",") if x.strip()]
+
+
+def _csv_optional(key: str, *, default: list[str] | None = None) -> list[str] | None:
+    if key not in os.environ:
+        return default
+    items = _csv(key)
+    return items or None
 
 
 def _csv_normalized(key: str) -> list[str] | None:

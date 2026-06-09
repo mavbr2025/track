@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
@@ -40,6 +40,15 @@ def _settings(**overrides: object) -> Settings:
     )
     base.update(overrides)
     return Settings(**base)
+
+
+def _days_from_now(offset: int) -> datetime:
+    now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    return now + timedelta(days=offset)
+
+
+def _ms_days_from_now(offset: int) -> str:
+    return str(int(_days_from_now(offset).timestamp() * 1000))
 
 
 def test_plan_shipment_update_maps_origin_and_destination_events_to_fields() -> None:
@@ -113,6 +122,256 @@ def test_plan_shipment_update_maps_origin_and_destination_events_to_fields() -> 
     assert plan.comment_text is not None
     assert "Last checked (UTC): " in plan.comment_text
     assert "ETA (port local time): 2026-03-25 14:00" in plan.comment_text
+
+
+def test_plan_shipment_update_does_not_update_task_status_even_when_enabled() -> None:
+    client = ClickUpClient(
+        _settings(
+            clickup_use_task_status=True,
+            clickup_task_status_on_update="tránsito",
+        )
+    )
+    shipment = ShipmentRef(
+        task_id="task-status-disabled",
+        task_name="Shipment status disabled",
+        shipping_line="maersk",
+        booking_no="BOOK-STATUS",
+        container_no="CONT-STATUS",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        eta_time=datetime(2026, 3, 25, 8, 0, tzinfo=timezone.utc),
+        eta_local_text="2026-03-25 14:00",
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.changed is True
+    assert plan.task_status_update is None
+
+
+def test_plan_shipment_update_moves_pending_booking_to_booking_confirmed() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-bk",
+        task_name="Shipment status BK",
+        shipping_line="one",
+        booking_no="BOOK-STATUS",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="Pendiente de booking",
+    )
+    status = ShipmentStatus(
+        status_text="Booking confirmed",
+        eta_time=_days_from_now(30),
+        eta_local_text=_days_from_now(30).date().isoformat(),
+        recent_moves=[
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI",
+                event_time=_days_from_now(5),
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "BK confirmado"
+
+
+def test_plan_shipment_update_moves_booking_confirmed_to_collected() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-collected",
+        task_name="Shipment status collected",
+        shipping_line="one",
+        booking_no="BOOK-STATUS",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="BK confirmado",
+    )
+    status = ShipmentStatus(
+        status_text="Empty out",
+        recent_moves=[
+            MovementEvent(
+                name="Empty Container Release to Shipper",
+                location="SHANGHAI",
+                event_time=_days_from_now(-2),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "Recolectado"
+
+
+def test_plan_shipment_update_moves_origin_port_to_transit_when_etd_passes() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-transit",
+        task_name="Shipment status transit",
+        shipping_line="one",
+        booking_no="BOOK-STATUS",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="En puerto Origen",
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        eta_time=_days_from_now(20),
+        eta_local_text=_days_from_now(20).date().isoformat(),
+        recent_moves=[
+            MovementEvent(
+                name="Empty Container Release to Shipper",
+                location="SHANGHAI",
+                event_time=_days_from_now(-7),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="SHANGHAI",
+                event_time=_days_from_now(-5),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI",
+                event_time=_days_from_now(-1),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "Tránsito"
+
+
+def test_plan_shipment_update_moves_transit_to_arriving_inside_eta_window() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-arriving",
+        task_name="Shipment status arriving",
+        shipping_line="one",
+        booking_no="BOOK-STATUS",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="Tránsito",
+    )
+    status = ShipmentStatus(
+        status_text="Arriving soon",
+        eta_time=_days_from_now(7),
+        eta_local_text=_days_from_now(7).date().isoformat(),
+        recent_moves=[
+            MovementEvent(
+                name="Empty Container Release to Shipper",
+                location="SHANGHAI",
+                event_time=_days_from_now(-14),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="SHANGHAI",
+                event_time=_days_from_now(-12),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI",
+                event_time=_days_from_now(-10),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "Por arribar"
+
+
+def test_plan_shipment_update_does_not_move_arriving_to_arrived_when_eta_passes() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-arrived",
+        task_name="Shipment status arrived",
+        shipping_line="one",
+        booking_no="BOOK-STATUS",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="Por arribar",
+        current_field_values={"eta-field": _ms_days_from_now(-1)},
+    )
+    status = ShipmentStatus(status_text="Arrived")
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update is None
+
+
+def test_plan_shipment_update_moves_arrived_to_en_route_after_gate_out_delivery() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-route",
+        task_name="Shipment status route",
+        shipping_line="one",
+        booking_no="BOOK-STATUS",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="arribado en puerto",
+        current_field_values={"gtot-delivery-field": _ms_days_from_now(0)},
+    )
+    status = ShipmentStatus(status_text="Gate out delivery")
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "en ruta a almacén"
+
+
+def test_plan_shipment_update_moves_warehouse_to_empty_returned_after_gate_in_empty() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-empty",
+        task_name="Shipment status empty",
+        shipping_line="one",
+        booking_no="BOOK-STATUS",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="en almacén",
+        current_field_values={"gtin-empty-field": _ms_days_from_now(0)},
+    )
+    status = ShipmentStatus(status_text="Empty returned")
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "Vacío devuelto"
+
+
+def test_plan_shipment_update_does_not_change_status_after_empty_returned() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-terminal",
+        task_name="Shipment status terminal",
+        shipping_line="one",
+        booking_no="BOOK-STATUS",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="VACIO DEVUELTO",
+        current_field_values={
+            "eta-field": _ms_days_from_now(7),
+            "gtot-empty-field": _ms_days_from_now(-14),
+            "gtin-full-field": _ms_days_from_now(-12),
+            "etd-field": _ms_days_from_now(-10),
+        },
+    )
+    status = ShipmentStatus(status_text="Late carrier update")
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update is None
 
 
 def test_plan_shipment_update_skips_destination_events_until_discharge_exists() -> None:
@@ -530,6 +789,163 @@ def test_plan_shipment_update_uses_first_origin_departure_cluster_for_etd() -> N
 
     updates = {update.label: update for update in plan.custom_field_updates}
     assert updates["ETD"].value.date().isoformat() == "2026-03-27"
+
+
+def test_plan_shipment_update_skips_transshipment_discharge_until_final_destination() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-7",
+        task_name="Shipment 7",
+        shipping_line="one",
+        booking_no="BOOK-7",
+        container_no="CONT-7",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="Transshipment in progress",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 2, 8, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 2, 12, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 10, 6, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 10, 10, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 11, 7, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="LAZARO CARDENAS",
+                event_time=datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["ETD"].value.date().isoformat() == "2026-03-02"
+    assert "Discharge date" not in updates
+    assert "Gate out delivery" not in updates
+    assert "Gate in empty" not in updates
+
+
+def test_plan_shipment_update_uses_final_discharge_after_transshipment() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-8",
+        task_name="Shipment 8",
+        shipping_line="one",
+        booking_no="BOOK-8",
+        container_no="CONT-8",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="Destination leg complete",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 2, 8, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, SHANGHAI",
+                event_time=datetime(2026, 3, 2, 12, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 10, 10, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 11, 7, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="PUSAN",
+                event_time=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="LAZARO CARDENAS",
+                event_time=datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="LAZARO CARDENAS",
+                event_time=datetime(2026, 4, 1, 14, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Gated Out (GTOT)",
+                location="LAZARO CARDENAS",
+                event_time=datetime(2026, 4, 2, 13, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="LAZARO CARDENAS",
+                event_time=datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["Discharge date"].value.date().isoformat() == "2026-04-01"
+    assert updates["Gate out delivery"].value.date().isoformat() == "2026-04-02"
+    assert updates["Gate in empty"].value.date().isoformat() == "2026-04-03"
 
 
 def test_format_port_local_time_preserves_carrier_clock_time() -> None:

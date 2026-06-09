@@ -75,10 +75,23 @@ Optional:
 - `CLICKUP_CF_SHIPMENT_STATUS` if you want a custom field that stores carrier status text.
 - `CLICKUP_CF_STATUS_LAST_CHECKED` if you want a dedicated custom field for last checked timestamp.
 - `CLICKUP_CF_TRACK_TRACE_SNAPSHOT` if you want updates/comments only when carrier data changes.
+- `CLICKUP_CF_ETA`, `CLICKUP_CF_ETD`, `CLICKUP_CF_DISCHARGE_DATE`
+- `CLICKUP_CF_GATE_IN_FULL`, `CLICKUP_CF_GATE_OUT_EMPTY`
+- `CLICKUP_CF_GATE_OUT_DELIVERY`, `CLICKUP_CF_GATE_IN_EMPTY`
 
-If you prefer using native ClickUp Task Status:
-- Set `CLICKUP_USE_TASK_STATUS=true`
-- Set `CLICKUP_TASK_STATUS_ON_UPDATE` to a valid status name in your workflow (example: `In Progress`)
+Native ClickUp Task Status updates are opt-in. Keep `CLICKUP_USE_TASK_STATUS=false`
+until you are ready to move workflow statuses automatically. When enabled, Track &
+Trace only moves tasks forward through this sequence: `Pendiente de booking` ->
+`BK confirmado` -> `Recolectado` -> `En puerto Origen` -> `Tránsito` ->
+`Por arribar` -> `arribado en puerto` -> `en ruta a almacén` / `en almacén` ->
+`Vacío devuelto`.
+
+The default status labels can be overridden with:
+`CLICKUP_STATUS_PENDING_BOOKING`, `CLICKUP_STATUS_BOOKING_CONFIRMED`,
+`CLICKUP_STATUS_COLLECTED`, `CLICKUP_STATUS_ORIGIN_PORT`,
+`CLICKUP_STATUS_IN_TRANSIT`, `CLICKUP_STATUS_ARRIVING`,
+`CLICKUP_STATUS_ARRIVED_PORT`, `CLICKUP_STATUS_EN_ROUTE_WAREHOUSE`,
+`CLICKUP_STATUS_IN_WAREHOUSE`, and `CLICKUP_STATUS_EMPTY_RETURNED`.
 
 ## Run
 Dry run (no updates):
@@ -86,9 +99,62 @@ Dry run (no updates):
 shipment-sync --dry-run
 ```
 
+Preview one shipment and show planned field/comment writes without updating ClickUp:
+```bash
+shipment-sync --preview-updates --container ABCD1234567
+```
+
 Live sync:
 ```bash
 shipment-sync
+```
+
+## ClickUp pricing and procurement sync
+This repo also includes a ClickUp-to-ClickUp pricing sync for moving approved pricing/procurement values from a quote task into a shipment task.
+
+Default safety rules:
+- Only approved pricing/procurement fields are copied.
+- Shipment values are only filled when empty unless you pass `--overwrite-existing`.
+- The shipment `MTM Quote #` field is filled from the source quote when available.
+- Live updates require a ClickUp token with permission to edit the destination shipment custom fields.
+
+Environment variables:
+- Reuses the same ClickUp auth as the shipment sync.
+- Optional for bulk mode:
+  - `CLICKUP_PRICING_LIST_ID` or `CLICKUP_PRICING_LIST_IDS`
+  - `CLICKUP_PRICING_MATCH_FIELD` (default: `MTM Quote #`)
+  - `CLICKUP_PRICING_SHIPMENT_MATCH_FIELDS` to try alternate shipment identifiers such as `MTM Booking`
+  - `CLICKUP_PRICING_QUOTE_MATCH_FIELDS` to index quote relationships such as `Shipment associated`
+  - `CLICKUP_PRICING_COPY_FIELDS` to override the default allowed field names/IDs
+  - `CLICKUP_PRICING_ONLY_EMPTY_TARGETS=true`
+  - `CLICKUP_PRICING_SET_QUOTE_NUMBER=true`
+
+Preview one explicit shipment/quote pair:
+```bash
+clickup-pricing-sync \
+  --shipment "https://app.clickup.com/t/8451352/MTMLXGT-24095" \
+  --quote "https://app.clickup.com/t/8451352/MTMQUOTE-3404" \
+  --dry-run
+```
+
+Preview one shipment and auto-discover the quote from the pricing list relationship:
+```bash
+CLICKUP_PRICING_LIST_ID=901705118181 \
+clickup-pricing-sync \
+  --shipment "https://app.clickup.com/t/8451352/MTMLXGT-25717" \
+  --dry-run
+```
+
+Apply that pair live:
+```bash
+clickup-pricing-sync \
+  --shipment "https://app.clickup.com/t/8451352/MTMLXGT-24095" \
+  --quote "https://app.clickup.com/t/8451352/MTMQUOTE-3404"
+```
+
+Bulk preview shipments that already have `MTM Quote #` populated:
+```bash
+clickup-pricing-sync --sync-linked-shipments --dry-run
 ```
 
 To avoid posting duplicate comments on unchanged shipments:
@@ -102,6 +168,19 @@ Start the local API server:
 shipment-api
 ```
 
+### DocuSeal document test endpoints
+
+The same FastAPI service includes a small DocuSeal middleware test surface:
+
+```text
+GET  /api/documents/requirements
+POST /api/documents/nda
+POST /api/webhooks/clickup/credit-contract
+POST /api/webhooks/docuseal
+```
+
+NDA issuing is standalone. Credit contract issuing is ClickUp-triggered. Both issuing endpoints default to `dry_run: true` so you can inspect the DocuSeal submission payload before sending emails. See [`docs/docuseal-document-test-plan.md`](/Users/mario/Documents/Software_Development/docs/docuseal-document-test-plan.md).
+
 By default it listens on `http://127.0.0.1:8000`.
 
 Available endpoints:
@@ -111,12 +190,34 @@ Available endpoints:
 - `POST /sync` runs the live shipment sync and returns the updated items.
 - `POST /track-trace/run` runs a protected Track-and-Trace sync trigger for production/webhook usage.
 - `POST /webhooks/clickup/track-trace` runs a protected ClickUp-facing Track-and-Trace webhook trigger.
+- `GET /pricing/health` returns whether ClickUp pricing sync auth is configured and whether bulk pricing list IDs are set.
+- `POST /pricing/sync` runs either an explicit shipment/quote pricing sync or a bulk linked-shipment pricing sync.
 - `GET /ap/health` returns whether the accounts-payable ClickUp config is ready.
 - `GET /ap/invoices` lists invoice tasks from the configured AP ClickUp list(s).
 - `GET /one/health` returns whether the ONE booking config is ready.
 - `GET /one/requirements` lists the exact ONE booking inputs still missing for a live integration.
 - `POST /one/bookings/request` submits a ONE booking request payload to the configured ONE booking endpoint.
 - `GET /one/bookings/confirmation` fetches ONE booking confirmation/status details for a reference.
+
+Pricing sync API examples:
+```bash
+curl -X POST http://127.0.0.1:8000/pricing/sync \
+  -H "Content-Type: application/json" \
+  -d '{
+    "shipment": "https://app.clickup.com/t/8451352/MTMLXGT-24095",
+    "quote": "https://app.clickup.com/t/8451352/MTMQUOTE-3404",
+    "dry_run": true
+  }'
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/pricing/sync \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sync_linked_shipments": true,
+    "dry_run": true
+  }'
+```
 
 Interactive docs:
 ```bash
@@ -270,7 +371,7 @@ Double-click app launcher with custom icon:
 ./scripts/build_track_and_trace_app.sh
 ```
 
-This creates `/Users/mario/Documents/Software_Development/MTM Track and Trace.app`.
+This creates `/Users/mario/Documents/Software_Development/T&Tv2.0.app`.
 Users can double-click that app in Finder to open Terminal and run the shipment sync.
 
 ## ClickUp -> iCloud Contacts sync
@@ -594,6 +695,9 @@ For Maersk official Events API mode (recommended):
 For MSC anti-bot resistant mode (recommended):
 - `MSC_USE_PLAYWRIGHT=true`
 - `MSC_PLAYWRIGHT_CHANNEL=chrome`
+- `MSC_MIN_SYNC_INTERVAL_HOURS=18`
+- `MSC_PER_TASK_TIMEOUT_SECONDS=75`
+- `MSC_MAX_REFERENCE_ATTEMPTS=4`
 - `MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=20`
 - `MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS=1`
 - `MSC_PLAYWRIGHT_TRACKING_URL=https://www.msc.com/en/track-a-shipment`

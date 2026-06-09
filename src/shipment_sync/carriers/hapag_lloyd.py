@@ -14,6 +14,7 @@ from shipment_sync.carriers.common import (
     extract_event_state_hint,
     extract_eta_time,
     extract_first,
+    extract_final_destination_vessel_voyage,
     extract_json_from_http_response,
     get_with_retries,
     parse_event_time,
@@ -151,6 +152,7 @@ class HapagLloydAdapter(CarrierAdapter):
         eta_time = extract_eta_time(payload)
         eta_local_text = _extract_eta_raw(payload)
         recent_moves = _extract_moves(payload)
+        vessel_voyage = extract_final_destination_vessel_voyage(_extract_event_list(payload))
         discovered_containers = extract_container_numbers(payload)
 
         if self.eta_only_mode:
@@ -163,6 +165,7 @@ class HapagLloydAdapter(CarrierAdapter):
                 discovered_containers=discovered_containers,
                 raw_source=source,
                 source_url=source_url,
+                vessel_voyage=vessel_voyage,
             )
 
         latest_move = recent_moves[0] if recent_moves else None
@@ -205,6 +208,7 @@ class HapagLloydAdapter(CarrierAdapter):
             raw_source=source,
             source_url=source_url,
             movement_details=movement_details,
+            vessel_voyage=vessel_voyage,
         )
 
     def _playwright_request(self, *, reference: str, ref_type_code: str) -> ShipmentStatus:
@@ -559,6 +563,7 @@ def _status_from_page(*, html: str, source_url: str, eta_only_mode: bool) -> Shi
     location = latest_move.location if latest_move else None
     event_time = latest_move.event_time if latest_move else None
     movement_details = _extract_page_transport_details(soup, latest_move)
+    vessel_voyage = _extract_page_final_vessel_voyage(soup)
 
     if eta_only_mode:
         return ShipmentStatus(
@@ -570,6 +575,7 @@ def _status_from_page(*, html: str, source_url: str, eta_only_mode: bool) -> Shi
             discovered_containers=discovered_containers,
             raw_source=f"hapag-playwright:{source_url}",
             source_url=source_url,
+            vessel_voyage=vessel_voyage,
         )
 
     return ShipmentStatus(
@@ -584,6 +590,7 @@ def _status_from_page(*, html: str, source_url: str, eta_only_mode: bool) -> Shi
         raw_source=f"hapag-playwright:{source_url}",
         source_url=source_url,
         movement_details=movement_details,
+        vessel_voyage=vessel_voyage,
     )
 
 
@@ -684,6 +691,53 @@ def _extract_page_transport_details(soup: BeautifulSoup, latest_move: MovementEv
         if parts:
             return " | ".join(parts)
     return None
+
+
+def _extract_page_final_vessel_voyage(soup: BeautifulSoup) -> str | None:
+    candidates: list[tuple[datetime | None, int, str]] = []
+    for table in soup.find_all("table"):
+        headers = [_clean_page_text(th.get_text(" ", strip=True)) for th in table.find_all("th")]
+        normalized = [header.lower() for header in headers]
+        if "status" not in normalized or not any("transport" in header for header in normalized):
+            continue
+
+        status_idx = _header_index(normalized, "status")
+        date_idx = _header_index(normalized, "date")
+        time_idx = _header_index(normalized, "time")
+        transport_idx = _header_index(normalized, "transport")
+        voyage_idx = _header_index(normalized, "voyage")
+
+        for idx, row in enumerate(table.find_all("tr")):
+            cells = row.find_all("td")
+            if not cells:
+                continue
+            values = [_clean_page_text(cell.get_text(" ", strip=True)) for cell in cells]
+            status = _value_at(values, status_idx) or ""
+            if not _hapag_final_vessel_event(status):
+                continue
+            parts = [part for part in (_value_at(values, transport_idx), _value_at(values, voyage_idx)) if part]
+            if not parts:
+                continue
+            date_text = _value_at(values, date_idx)
+            time_text = _value_at(values, time_idx)
+            event_time_local_text = " ".join(part for part in (date_text, time_text) if part).strip() or date_text
+            candidates.append((parse_event_time(event_time_local_text), idx, " ".join(parts)))
+
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda item: (
+            item[0] is not None,
+            item[0].isoformat() if item[0] is not None else "",
+            item[1],
+        ),
+    )[2]
+
+
+def _hapag_final_vessel_event(value: str) -> bool:
+    normalized = value.strip().lower()
+    return "arriv" in normalized or "discharg" in normalized
 
 
 def _header_index(headers: list[str], fragment: str) -> int | None:

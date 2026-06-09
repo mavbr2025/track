@@ -19,6 +19,7 @@ from shipment_sync.carriers.common import (
     extract_container_numbers,
     extract_eta_time,
     extract_event_state_hint,
+    extract_final_destination_vessel_voyage,
     extract_first,
     parse_event_time,
     to_dcsa_movement_name,
@@ -391,6 +392,7 @@ def _build_status_from_payload(
     source_url: str,
 ) -> ShipmentStatus | None:
     normalized_payload = _normalize_cosco_payload(payload)
+    events = _extract_event_list(normalized_payload)
     recent_moves = _extract_moves(normalized_payload)
     latest_move = recent_moves[0] if recent_moves else None
     eta_time = extract_eta_time(normalized_payload)
@@ -426,6 +428,7 @@ def _build_status_from_payload(
         raw_source=source,
         source_url=source_url,
         movement_details=movement_details,
+        vessel_voyage=extract_final_destination_vessel_voyage(events),
     )
 
 

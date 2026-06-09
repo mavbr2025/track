@@ -11,7 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from shipment_sync.carriers.base import CarrierAdapter
-from shipment_sync.carriers.common import extract_container_numbers, parse_event_time
+from shipment_sync.carriers.common import extract_container_numbers, parse_event_time, render_vessel_voyage
 from shipment_sync.carriers.generic_line import GenericLineAdapter
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 from shipment_sync.playwright_runner import run_sync_playwright
@@ -147,7 +147,11 @@ class WanHaiAdapter(CarrierAdapter):
                                 detail_page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
                             detail_html = detail_page.content()
                             detail = _parse_booking_detail_page(detail_html)
-                            discovered_containers = extract_container_numbers([discovered_containers, detail_html, detail])
+                            detail_containers = _extract_booking_detail_containers(detail_html)
+                            if detail_containers:
+                                discovered_containers = detail_containers
+                            elif cargo_type == "1":
+                                discovered_containers = extract_container_numbers([discovered_containers, detail])
                         except Exception:
                             detail = None
 
@@ -166,15 +170,36 @@ class WanHaiAdapter(CarrierAdapter):
 
 def _build_reference_attempts(shipment: ShipmentRef) -> list[tuple[str, str]]:
     attempts: list[tuple[str, str]] = []
-    if shipment.container_no:
-        ref = _normalize_reference(shipment.container_no)
-        if ref:
-            attempts.append((ref, "1"))
     if shipment.booking_no:
         ref = _normalize_reference(shipment.booking_no)
         if ref:
             attempts.append((ref, "2"))
-    return attempts
+    if shipment.container_no:
+        for ref in _container_references(shipment.container_no):
+            attempts.append((ref, "1"))
+    return _dedupe_reference_attempts(attempts)
+
+
+def _container_references(reference: str) -> list[str]:
+    refs = [tok.strip().upper() for tok in re.split(r"[,\s]+", reference) if re.match(r"^[A-Za-z]{4}\d{7}$", tok.strip())]
+    if refs:
+        return refs
+    normalized = _normalize_reference(reference)
+    return [normalized] if normalized else []
+
+
+def _dedupe_reference_attempts(attempts: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    deduped: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for reference, cargo_type in attempts:
+        if not reference:
+            continue
+        key = (reference.upper(), cargo_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((reference, cargo_type))
+    return deduped
 
 
 def _normalize_reference(reference: str) -> str:
@@ -260,6 +285,18 @@ def _parse_booking_detail_page(html: str) -> dict[str, str]:
     return detail
 
 
+def _extract_booking_detail_containers(html: str) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    for table in soup.find_all("table"):
+        table_text = table.get_text(" ", strip=True)
+        if "Ctnr No." not in table_text and "Cntr No." not in table_text and "Container No." not in table_text:
+            continue
+        containers = extract_container_numbers(table_text)
+        if containers:
+            return containers
+    return []
+
+
 def _status_from_parsed(
     *,
     cargo_type: str,
@@ -287,6 +324,10 @@ def _status_from_parsed(
         _render_route(detail),
     ]
     movement_details = " | ".join(bit for bit in route_bits if bit)
+    vessel_voyage = render_vessel_voyage(
+        detail.get("vessel") or result.get("vessel"),
+        detail.get("voyage") or result.get("voyage"),
+    )
 
     latest_move = None
     if latest_move_name or latest_move_location or latest_move_time_local:
@@ -316,6 +357,7 @@ def _status_from_parsed(
         raw_source=f"wan_hai-playwright:{source_url}",
         source_url=source_url,
         movement_details=movement_details or None,
+        vessel_voyage=vessel_voyage,
     )
 
 

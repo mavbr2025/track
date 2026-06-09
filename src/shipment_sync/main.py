@@ -96,6 +96,8 @@ def main() -> None:
                         )
                     if item.latest_move_location:
                         latest_move_bits.append(f"latest_move_location={item.latest_move_location}")
+                    if item.vessel_voyage:
+                        latest_move_bits.append(f"vessel_voyage={item.vessel_voyage}")
                     latest_move_suffix = f" | {' | '.join(latest_move_bits)}" if latest_move_bits else ""
                     print(
                         f"- [{label}] {item.task_name} | line={item.shipping_line} | "
