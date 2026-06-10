@@ -126,6 +126,8 @@ class OneAdapter(CarrierAdapter):
             return None
         data = search_result.get("data")
         if not isinstance(data, list) or not data:
+            if search_type == "BKG_NO":
+                return self._fetch_processing_status_from_voyage(reference, source_url)
             return None
 
         first_item = data[0] if isinstance(data[0], dict) else None
@@ -192,6 +194,30 @@ class OneAdapter(CarrierAdapter):
             raw_source=raw_source,
             source_url=source_url,
             movement_details=movement_details,
+            vessel_voyage=vessel_voyage,
+            booking_status_text=booking_status_text,
+        )
+
+    def _fetch_processing_status_from_voyage(self, booking_no: str, source_url: str) -> ShipmentStatus | None:
+        voyage_legs = self._fetch_voyage_list(booking_no)
+        if not voyage_legs:
+            return None
+
+        eta_time, eta_local_text = _extract_eta_from_voyage_list_data(voyage_legs)
+        vessel_voyage = _extract_final_discharge_vessel_voyage(voyage_legs, {})
+        departure_move = _extract_departure_move_from_voyage_list_data(voyage_legs)
+        recent_moves = [departure_move] if departure_move is not None else []
+        raw_source = f"one-edh-voyage:{self.edh_base_url}/vessel/track-and-trace/voyage-list"
+        booking_status_text = "Data Processing"
+
+        return ShipmentStatus(
+            status_text=_eta_status_text(eta_time) if self.eta_only_mode else booking_status_text,
+            eta_time=eta_time,
+            eta_local_text=eta_local_text,
+            latest_move=departure_move,
+            recent_moves=recent_moves,
+            raw_source=raw_source,
+            source_url=source_url,
             vessel_voyage=vessel_voyage,
             booking_status_text=booking_status_text,
         )

@@ -34,6 +34,18 @@ class _StubSession:
         return _StubResponse(self.payload)
 
 
+class _RouteStubSession:
+    def __init__(self, *, search_payload: dict, voyage_payload: dict) -> None:
+        self.search_payload = search_payload
+        self.voyage_payload = voyage_payload
+
+    def post(self, url: str, json: dict, timeout: int) -> _StubResponse:
+        return _StubResponse(self.search_payload)
+
+    def get(self, url: str, params: dict[str, str], timeout: int) -> _StubResponse:
+        return _StubResponse(self.voyage_payload)
+
+
 def _settings(**overrides: object) -> Settings:
     base = dict(
         clickup_api_token="token",
@@ -192,6 +204,48 @@ def test_extract_final_discharge_vessel_voyage_uses_final_pod_leg() -> None:
     )
 
     assert vessel_voyage == "SAN ALFONSO 26021E"
+
+
+def test_fetch_status_treats_empty_booking_search_with_voyage_as_processing() -> None:
+    adapter = OneAdapter()
+    adapter.session = _RouteStubSession(
+        search_payload={"status": 200, "code": 1, "message": "Success"},
+        voyage_payload={
+            "status": 200,
+            "code": 1,
+            "message": "Success",
+            "data": [
+                {
+                    "vesselEngName": "ONE SERENITY",
+                    "scheduleVoyageNumber": "2625",
+                    "scheduleDirectionCode": "E",
+                    "pol": {
+                        "locationName": "NINGBO, ZHEJIANG, CHINA",
+                        "isActual": False,
+                        "date": "2026-06-23T21:00:00.000Z",
+                        "locationCode": "CNNGB",
+                    },
+                    "pod": {
+                        "locationName": "PUERTO QUETZAL, GUATEMALA",
+                        "isArrivalActual": False,
+                        "arrivalDate": "2026-07-29T03:00:00.000Z",
+                        "isBerthingActual": False,
+                        "berthingDate": "2026-07-29T04:00:00.000Z",
+                        "locationCode": "GTPRQ",
+                    },
+                    "outboundConsortiumVoyage": "2625E",
+                }
+            ],
+        },
+    )
+
+    status = adapter._fetch_status_from_edh("NB6BFM822300", "B")
+
+    assert status is not None
+    assert status.booking_status_text == "Data Processing"
+    assert status.eta_local_text == "2026-07-29T04:00:00.000Z"
+    assert status.vessel_voyage == "ONE SERENITY 2625E"
+    assert status.recent_moves[0].name == "Transport Departed (DEPA)"
 
 
 def test_plan_shipment_update_writes_vessel_voyage_field() -> None:
