@@ -599,6 +599,8 @@ class ClickUpClient:
                 comment_lines.append(f"Carrier source: {source_link}")
             if status.vessel_voyage:
                 comment_lines.append(f"Vessel/Voyage: {status.vessel_voyage}")
+            if status.booking_status_text:
+                comment_lines.append(f"Booking status: {status.booking_status_text}")
             if recent_moves:
                 comment_lines.append(recent_moves_label)
                 for idx, move in enumerate(recent_moves, start=1):
@@ -632,6 +634,8 @@ class ClickUpClient:
                 comment_lines.append(f"Last movement details: {status.movement_details}")
             if status.vessel_voyage:
                 comment_lines.append(f"Vessel/Voyage: {status.vessel_voyage}")
+            if status.booking_status_text:
+                comment_lines.append(f"Booking status: {status.booking_status_text}")
             if recent_moves:
                 comment_lines.append(recent_moves_label)
                 for idx, move in enumerate(recent_moves, start=1):
@@ -914,7 +918,13 @@ def _derive_operational_status_index(
 
     target_index: int | None = None
 
-    if carrier_set and booking_set and etd_date is not None and eta_date is not None:
+    if (
+        carrier_set
+        and booking_set
+        and etd_date is not None
+        and eta_date is not None
+        and not _carrier_booking_is_pending(status)
+    ):
         target_index = 1
 
     if gate_out_empty_date is not None and gate_in_full_date is None:
@@ -936,6 +946,20 @@ def _derive_operational_status_index(
         target_index = max(target_index or 0, 9)
 
     return target_index
+
+
+def _carrier_booking_is_pending(status: ShipmentStatus) -> bool:
+    candidates = [
+        status.booking_status_text,
+        status.status_text,
+        status.movement_details,
+        status.latest_move.name if status.latest_move else None,
+    ]
+    for value in candidates:
+        normalized = _normalize_workflow_status_name(value or "")
+        if normalized in {"processing", "dataprocessing", "pending", "bookingprocessing"}:
+            return True
+    return False
 
 
 def _field_date(field_id: str | None, values: dict[str, Any]) -> date | None:
@@ -1419,6 +1443,7 @@ def _compute_snapshot_hash(
         "event_time": status.event_time.isoformat() if status.event_time else "",
         "movement_details": status.movement_details or "",
         "vessel_voyage": status.vessel_voyage or "",
+        "booking_status_text": status.booking_status_text or "",
         "latest_move_name": latest_move.name if latest_move else "",
         "latest_move_location": latest_move.location if latest_move else "",
         "latest_move_time": _format_port_local_time(

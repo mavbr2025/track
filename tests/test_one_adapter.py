@@ -7,6 +7,7 @@ from shipment_sync.config import Settings
 from shipment_sync.carriers.one import (
     OneAdapter,
     _extract_eta_from_cargo_events,
+    _extract_booking_status_text,
     _extract_final_discharge_vessel_voyage,
     _latest_move_from_search_item,
     _pick_latest_move,
@@ -123,6 +124,21 @@ def test_latest_move_from_search_item_uses_trigger_type() -> None:
     assert move.location == "PUERTO QUETZAL"
     assert move.event_time == datetime(2026, 4, 9, 11, 20, tzinfo=timezone.utc)
     assert move.event_state == "actual"
+
+
+def test_extract_booking_status_text_from_one_processing_search_item() -> None:
+    status_text = _extract_booking_status_text(
+        {
+            "bookingNo": "TAOGD4882500",
+            "latestEvent": {
+                "eventName": "Processing",
+                "locationName": "",
+                "date": "",
+            },
+        }
+    )
+
+    assert status_text == "Processing"
 
 
 def test_pick_latest_move_prefers_newest_actual_over_future_estimates() -> None:

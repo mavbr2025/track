@@ -132,6 +132,7 @@ class OneAdapter(CarrierAdapter):
         if not first_item:
             return None
         discovered_containers = extract_container_numbers(search_result)
+        booking_status_text = _extract_booking_status_text(first_item)
 
         eta_time, eta_local_text = _extract_eta_from_search_item(first_item)
         raw_source = f"one-edh-search:{search_url}"
@@ -165,6 +166,7 @@ class OneAdapter(CarrierAdapter):
                 raw_source=raw_source,
                 source_url=source_url,
                 vessel_voyage=vessel_voyage,
+                booking_status_text=booking_status_text,
             )
 
         latest_event = first_item.get("latestEvent") if isinstance(first_item.get("latestEvent"), dict) else {}
@@ -191,6 +193,7 @@ class OneAdapter(CarrierAdapter):
             source_url=source_url,
             movement_details=movement_details,
             vessel_voyage=vessel_voyage,
+            booking_status_text=booking_status_text,
         )
 
     def _fetch_voyage_list(self, booking_no: str) -> list[dict[str, Any]]:
@@ -488,6 +491,15 @@ def _latest_move_from_search_item(item: dict[str, Any]) -> MovementEvent | None:
         event_time_local_text=event_local_text,
         event_state=_normalize_event_state(extract_event_state_hint(latest)),
     )
+
+
+def _extract_booking_status_text(item: dict[str, Any]) -> str | None:
+    latest = item.get("latestEvent")
+    if isinstance(latest, dict):
+        event_name = _safe_text(latest.get("eventName"))
+        if event_name:
+            return event_name
+    return None
 
 
 def _pick_latest_move(moves: list[MovementEvent], *, fallback: MovementEvent | None = None) -> MovementEvent | None:

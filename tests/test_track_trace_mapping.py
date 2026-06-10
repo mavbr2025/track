@@ -181,6 +181,39 @@ def test_plan_shipment_update_moves_pending_booking_to_booking_confirmed() -> No
     assert plan.task_status_update == "BK confirmado"
 
 
+def test_plan_shipment_update_keeps_one_processing_booking_pending() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-one-processing",
+        task_name="Shipment status ONE processing",
+        shipping_line="one",
+        booking_no="TAOGD4882500",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="Pendiente de booking",
+    )
+    status = ShipmentStatus(
+        status_text="ETA 2026-07-22T04:00:00+00:00",
+        eta_time=_days_from_now(30),
+        eta_local_text=_days_from_now(30).date().isoformat(),
+        booking_status_text="Processing",
+        recent_moves=[
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="QINGDAO, SHANDONG",
+                event_time=_days_from_now(5),
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update is None
+    assert plan.comment_text is not None
+    assert "Booking status: Processing" in plan.comment_text
+
+
 def test_plan_shipment_update_moves_booking_confirmed_to_collected() -> None:
     client = ClickUpClient(_settings(clickup_use_task_status=True))
     shipment = ShipmentRef(
