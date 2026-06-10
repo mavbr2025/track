@@ -242,6 +242,149 @@ def test_plan_shipment_update_moves_booking_confirmed_to_collected() -> None:
     assert plan.task_status_update == "Recolectado"
 
 
+def test_plan_shipment_update_moves_rta_pending_to_bk_confirmed() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-rta-bk",
+        task_name="RTA booking",
+        shipping_line="msc",
+        booking_no="177EBBPPXVNN2502",
+        container_no="MSNU9927513",
+        list_id="169175872",
+        list_name="RTA Shipments",
+        current_task_status="bk pending to confirm",
+        current_field_values={
+            "eta-field": _ms_days_from_now(30),
+            "etd-field": _ms_days_from_now(5),
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA 2026-07-23",
+        eta_time=_days_from_now(30),
+        eta_local_text=_days_from_now(30).date().isoformat(),
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "bk confirmed"
+
+
+def test_plan_shipment_update_moves_rta_to_at_port_after_actual_discharge() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-rta-port",
+        task_name="RTA port",
+        shipping_line="msc",
+        booking_no="BOOK-RTA",
+        container_no="CONT-RTA",
+        list_id="169175872",
+        list_name="RTA Shipments",
+        current_task_status="near arrival",
+    )
+    status = ShipmentStatus(
+        status_text="Discharged",
+        recent_moves=[
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="CHARLESTON, US",
+                event_time=_days_from_now(-1),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "at port"
+
+
+def test_plan_shipment_update_moves_rta_to_at_rail_after_actual_rail_handoff() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-rta-rail",
+        task_name="RTA rail",
+        shipping_line="msc",
+        booking_no="BOOK-RTA",
+        container_no="CONT-RTA",
+        list_id="169175872",
+        list_name="RTA Shipments",
+        current_task_status="at port",
+    )
+    status = ShipmentStatus(
+        status_text="Rail departure",
+        recent_moves=[
+            MovementEvent(
+                name="Rail Departure",
+                location="CHARLESTON INTERMODAL",
+                event_time=_days_from_now(-1),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "at rail"
+
+
+def test_plan_shipment_update_moves_rta_to_arrived_ramp_after_actual_rail_ramp_arrival() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-rta-ramp",
+        task_name="RTA ramp",
+        shipping_line="msc",
+        booking_no="BOOK-RTA",
+        container_no="CONT-RTA",
+        list_id="169175872",
+        list_name="RTA Shipments",
+        current_task_status="at rail",
+    )
+    status = ShipmentStatus(
+        status_text="Rail ramp arrival",
+        recent_moves=[
+            MovementEvent(
+                name="Container Arrived at Rail Ramp",
+                location="DALLAS RAMP",
+                event_time=_days_from_now(0),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "container arrived at ramp"
+
+
+def test_plan_shipment_update_does_not_move_rta_rail_status_from_estimated_rail_event() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-rta-rail-estimated",
+        task_name="RTA rail estimated",
+        shipping_line="msc",
+        booking_no="BOOK-RTA",
+        container_no="CONT-RTA",
+        list_id="169175872",
+        list_name="RTA Shipments",
+        current_task_status="at port",
+    )
+    status = ShipmentStatus(
+        status_text="Rail departure estimate",
+        recent_moves=[
+            MovementEvent(
+                name="Rail Departure",
+                location="CHARLESTON INTERMODAL",
+                event_time=_days_from_now(2),
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update is None
+
+
 def test_plan_shipment_update_moves_origin_port_to_transit_when_etd_passes() -> None:
     client = ClickUpClient(_settings(clickup_use_task_status=True))
     shipment = ShipmentRef(

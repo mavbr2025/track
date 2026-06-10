@@ -847,35 +847,37 @@ def _build_task_status_update(
     if not current_status:
         return None
 
-    sequence = _operational_status_sequence(settings)
-    normalized_to_index = {
-        _normalize_workflow_status_name(name): idx for idx, name in enumerate(sequence)
-    }
-    current_index = normalized_to_index.get(_normalize_workflow_status_name(current_status))
-    if current_index is None:
+    status_by_step = _workflow_status_by_step(settings, shipment)
+    current_step = _workflow_step_for_status(status_by_step, current_status)
+    if current_step is None:
         return None
-    terminal_index = normalized_to_index.get(
-        _normalize_workflow_status_name(settings.clickup_status_empty_returned)
-    )
-    if terminal_index is not None and current_index >= terminal_index:
+    if _workflow_step_order(current_step) >= _workflow_step_order("empty_returned"):
         return None
 
     effective_values = dict(shipment.current_field_values)
     for update in candidate_field_updates:
         effective_values[update.field_id] = update.value
 
-    target_index = _derive_operational_status_index(
+    target_step = _derive_operational_status_step(
         shipment=shipment,
         status=status,
         settings=settings,
         field_values=effective_values,
-        current_index=current_index,
+        current_step=current_step,
+        status_by_step=status_by_step,
         now_utc=now_utc,
     )
-    if target_index is None or target_index <= current_index:
+    target_status_step = _status_step_for_target(status_by_step, target_step)
+    if target_status_step is None:
         return None
 
-    return sequence[target_index]
+    sequence = _workflow_status_sequence(status_by_step)
+    current_index = sequence.index(current_step)
+    target_index = sequence.index(target_status_step)
+    if target_index <= current_index:
+        return None
+
+    return status_by_step[target_status_step]
 
 
 def _operational_status_sequence(settings: Settings) -> list[str]:
@@ -893,15 +895,116 @@ def _operational_status_sequence(settings: Settings) -> list[str]:
     ]
 
 
-def _derive_operational_status_index(
+_WORKFLOW_STEP_ORDER = (
+    "pending_booking",
+    "booking_confirmed",
+    "collected",
+    "origin_port",
+    "in_transit",
+    "arriving",
+    "arrived_port",
+    "at_rail",
+    "arrived_ramp",
+    "en_route_warehouse",
+    "in_warehouse",
+    "empty_returned",
+)
+
+
+def _workflow_status_by_step(settings: Settings, shipment: ShipmentRef) -> dict[str, str]:
+    if _uses_rta_workflow(shipment):
+        return {
+            "pending_booking": "bk pending to confirm",
+            "booking_confirmed": "bk confirmed",
+            "in_transit": "transit",
+            "arriving": "near arrival",
+            "arrived_port": "at port",
+            "at_rail": "at rail",
+            "arrived_ramp": "container arrived at ramp",
+            "en_route_warehouse": "released to consignee",
+            "in_warehouse": "warehouse",
+            "empty_returned": "empty returned",
+        }
+
+    return {
+        "pending_booking": settings.clickup_status_pending_booking,
+        "booking_confirmed": settings.clickup_status_booking_confirmed,
+        "collected": settings.clickup_status_collected,
+        "origin_port": settings.clickup_status_origin_port,
+        "in_transit": settings.clickup_status_in_transit,
+        "arriving": settings.clickup_status_arriving,
+        "arrived_port": settings.clickup_status_arrived_port,
+        "en_route_warehouse": settings.clickup_status_en_route_warehouse,
+        "in_warehouse": settings.clickup_status_in_warehouse,
+        "empty_returned": settings.clickup_status_empty_returned,
+    }
+
+
+def _uses_rta_workflow(shipment: ShipmentRef) -> bool:
+    normalized_list_name = _normalize_workflow_status_name(shipment.list_name or "")
+    if normalized_list_name == "rtashipments":
+        return True
+
+    normalized_status = _normalize_workflow_status_name(shipment.current_task_status or "")
+    return normalized_status in {
+        "bkpendingtoconfirm",
+        "bkconfirmed",
+        "neararrival",
+        "atport",
+        "atrail",
+        "containerarrivedatramp",
+        "releasedtoconsignee",
+    }
+
+
+def _workflow_status_sequence(status_by_step: dict[str, str]) -> list[str]:
+    return [step for step in _WORKFLOW_STEP_ORDER if step in status_by_step]
+
+
+def _workflow_step_for_status(status_by_step: dict[str, str], status: str) -> str | None:
+    normalized_status = _normalize_workflow_status_name(status)
+    for step, candidate in status_by_step.items():
+        if _normalize_workflow_status_name(candidate) == normalized_status:
+            return step
+    return None
+
+
+def _status_step_for_target(status_by_step: dict[str, str], target_step: str | None) -> str | None:
+    if target_step is None:
+        return None
+
+    target_order = _workflow_step_order(target_step)
+    for step in reversed(_WORKFLOW_STEP_ORDER[: target_order + 1]):
+        if step in status_by_step:
+            return step
+    return None
+
+
+def _max_workflow_step(current: str | None, candidate: str) -> str:
+    if current is None:
+        return candidate
+    if _workflow_step_order(candidate) > _workflow_step_order(current):
+        return candidate
+    return current
+
+
+def _workflow_step_order(step: str) -> int:
+    try:
+        return _WORKFLOW_STEP_ORDER.index(step)
+    except ValueError:
+        return -1
+
+
+def _derive_operational_status_step(
     *,
     shipment: ShipmentRef,
     status: ShipmentStatus,
     settings: Settings,
     field_values: dict[str, Any],
-    current_index: int,
+    current_step: str,
+    status_by_step: dict[str, str],
     now_utc: datetime,
-) -> int | None:
+) -> str | None:
     today = now_utc.date()
     carrier_set = bool((shipment.shipping_line or "").strip())
     booking_set = bool((shipment.booking_no or "").strip())
@@ -915,8 +1018,9 @@ def _derive_operational_status_index(
     gate_in_full_date = _field_date(settings.cf_gate_in_full, field_values)
     gate_out_delivery_date = _field_date(settings.cf_gate_out_delivery, field_values)
     gate_in_empty_date = _field_date(settings.cf_gate_in_empty, field_values)
+    discharge_date = _field_date(settings.cf_discharge_date, field_values)
 
-    target_index: int | None = None
+    target_step: str | None = None
 
     if (
         carrier_set
@@ -925,27 +1029,42 @@ def _derive_operational_status_index(
         and eta_date is not None
         and not _carrier_booking_is_pending(status)
     ):
-        target_index = 1
+        target_step = "booking_confirmed"
 
     if gate_out_empty_date is not None and gate_in_full_date is None:
-        target_index = max(target_index or 0, 2)
+        target_step = _max_workflow_step(target_step, "collected")
 
     if gate_out_empty_date is not None and gate_in_full_date is not None and etd_date is not None:
         if etd_date > today:
-            target_index = max(target_index or 0, 3)
+            target_step = _max_workflow_step(target_step, "origin_port")
         elif eta_date is not None and eta_date > today:
-            target_index = max(target_index or 0, 4)
+            target_step = _max_workflow_step(target_step, "in_transit")
             days_until_eta = (eta_date - today).days
             if 5 <= days_until_eta <= 10:
-                target_index = max(target_index, 5)
+                target_step = _max_workflow_step(target_step, "arriving")
 
-    if gate_out_delivery_date is not None and (target_index is not None and target_index >= 6 or current_index >= 6):
-        target_index = max(target_index or 0, 7)
+    if discharge_date is not None:
+        target_step = _max_workflow_step(target_step, "arrived_port")
 
-    if gate_in_empty_date is not None and gate_in_empty_date <= today and (target_index is not None and target_index >= 7 or current_index >= 7):
-        target_index = max(target_index or 0, 9)
+    if "at_rail" in status_by_step and _has_actual_rail_departure(status, current_step=current_step):
+        target_step = _max_workflow_step(target_step, "at_rail")
 
-    return target_index
+    if "arrived_ramp" in status_by_step and _has_actual_rail_ramp_arrival(status, current_step=current_step):
+        target_step = _max_workflow_step(target_step, "arrived_ramp")
+
+    if gate_out_delivery_date is not None and (
+        target_step is not None and _workflow_step_order(target_step) >= _workflow_step_order("arrived_port")
+        or _workflow_step_order(current_step) >= _workflow_step_order("arrived_port")
+    ):
+        target_step = _max_workflow_step(target_step, "en_route_warehouse")
+
+    if gate_in_empty_date is not None and gate_in_empty_date <= today and (
+        target_step is not None and _workflow_step_order(target_step) >= _workflow_step_order("en_route_warehouse")
+        or _workflow_step_order(current_step) >= _workflow_step_order("en_route_warehouse")
+    ):
+        target_step = _max_workflow_step(target_step, "empty_returned")
+
+    return target_step
 
 
 def _carrier_booking_is_pending(status: ShipmentStatus) -> bool:
@@ -960,6 +1079,83 @@ def _carrier_booking_is_pending(status: ShipmentStatus) -> bool:
         if normalized in {"processing", "dataprocessing", "pending", "bookingprocessing"}:
             return True
     return False
+
+
+def _has_actual_rail_departure(status: ShipmentStatus, *, current_step: str) -> bool:
+    return any(
+        _move_is_actual(move) and _is_rail_departure_move(move)
+        for move in _post_discharge_moves(status, current_step=current_step)
+    )
+
+
+def _has_actual_rail_ramp_arrival(status: ShipmentStatus, *, current_step: str) -> bool:
+    return any(
+        _move_is_actual(move) and _is_rail_ramp_arrival_move(move)
+        for move in _post_discharge_moves(status, current_step=current_step)
+    )
+
+
+def _post_discharge_moves(status: ShipmentStatus, *, current_step: str) -> list[MovementEvent]:
+    ordered_moves = _order_moves_ascending(status.recent_moves)
+    discharge_index = _find_destination_discharge_index(ordered_moves)
+    if discharge_index is not None:
+        return ordered_moves[discharge_index + 1 :]
+
+    if _workflow_step_order(current_step) >= _workflow_step_order("arrived_port"):
+        return ordered_moves
+    return []
+
+
+def _is_rail_departure_move(move: MovementEvent) -> bool:
+    text = _move_search_text(move)
+    if not _contains_any(text, ("rail", "intermodal", "ramp")):
+        return False
+    return _contains_any(
+        text,
+        (
+            "depart",
+            "departure",
+            "loaded to rail",
+            "loaded on rail",
+            "on rail",
+            "rail out",
+            "rail ramp out",
+            "interchanged to rail",
+            "handed to rail",
+            "tendered to rail",
+        ),
+    )
+
+
+def _is_rail_ramp_arrival_move(move: MovementEvent) -> bool:
+    text = _move_search_text(move)
+    if not _contains_any(text, ("rail", "ramp", "intermodal")):
+        return False
+    return _contains_any(
+        text,
+        (
+            "arriv",
+            "available",
+            "placed",
+            "grounded",
+            "notified",
+            "at ramp",
+            "rail in",
+            "intermodal terminal",
+        ),
+    )
+
+
+def _move_search_text(move: MovementEvent) -> str:
+    return " ".join(
+        part.strip().lower()
+        for part in (move.name, move.location, move.event_time_local_text)
+        if part and part.strip()
+    )
+
+
+def _contains_any(value: str, needles: tuple[str, ...]) -> bool:
+    return any(needle in value for needle in needles)
 
 
 def _field_date(field_id: str | None, values: dict[str, Any]) -> date | None:
