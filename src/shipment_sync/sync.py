@@ -2,7 +2,9 @@ import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import multiprocessing as mp
 import os
+from queue import Empty
 import re
 import signal
 import socket
@@ -15,7 +17,7 @@ from shipment_sync.audit import SafeSyncAuditLogger
 from shipment_sync.carriers.registry import build_carrier_registry
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
-from shipment_sync.models import ShipmentRef
+from shipment_sync.models import ShipmentRef, ShipmentStatus
 
 
 @dataclass
@@ -207,8 +209,7 @@ def _run_sync(
             continue
 
         try:
-            with _carrier_call_timeout(shipment):
-                status = adapter.fetch_status(shipment)
+            status = _fetch_carrier_status(adapter, shipment)
             write_result = client.update_shipment_status(shipment, status)
             if write_result.changed:
                 updated_items.append(
@@ -317,6 +318,66 @@ def _list_label(list_name: str | None, list_id: str) -> str:
     return list_id
 
 
+def _fetch_carrier_status(adapter, shipment: ShipmentRef) -> ShipmentStatus:
+    if _carrier_process_isolated(shipment.shipping_line):
+        return _fetch_carrier_status_in_process(
+            shipment,
+            timeout_seconds=_carrier_process_timeout_seconds(shipment.shipping_line),
+        )
+
+    with _carrier_call_timeout(shipment):
+        return adapter.fetch_status(shipment)
+
+
+def _fetch_carrier_status_in_process(shipment: ShipmentRef, *, timeout_seconds: int) -> ShipmentStatus:
+    if timeout_seconds <= 0:
+        adapter = build_carrier_registry().get(shipment.shipping_line)
+        if adapter is None:
+            raise ValueError(f"No adapter registered for carrier {shipment.shipping_line}.")
+        return adapter.fetch_status(shipment)
+
+    start_method = os.getenv("SHIPMENT_FETCH_PROCESS_START_METHOD", "").strip()
+    if not start_method:
+        start_method = "fork" if "fork" in mp.get_all_start_methods() else "spawn"
+    ctx = mp.get_context(start_method)
+    result_queue = ctx.Queue(maxsize=1)
+    process = ctx.Process(target=_fetch_carrier_status_child, args=(shipment, result_queue))
+    process.start()
+    process.join(timeout_seconds)
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+        if process.is_alive():
+            process.kill()
+            process.join(5)
+        raise TimeoutError(
+            f"Carrier lookup exceeded {timeout_seconds}s process timeout "
+            f"for task {shipment.task_id} ({shipment.shipping_line})."
+        )
+
+    try:
+        outcome, payload = result_queue.get_nowait()
+    except Empty:
+        raise RuntimeError(
+            f"Carrier lookup process exited without a result for task {shipment.task_id} "
+            f"({shipment.shipping_line}); exitcode={process.exitcode}."
+        )
+
+    if outcome == "ok":
+        return payload
+    raise RuntimeError(str(payload))
+
+
+def _fetch_carrier_status_child(shipment: ShipmentRef, result_queue) -> None:
+    try:
+        adapter = build_carrier_registry().get(shipment.shipping_line)
+        if adapter is None:
+            raise ValueError(f"No adapter registered for carrier {shipment.shipping_line}.")
+        result_queue.put(("ok", adapter.fetch_status(shipment)))
+    except BaseException as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
 @contextmanager
 def _carrier_call_timeout(shipment: ShipmentRef):
     timeout_seconds = _carrier_call_timeout_seconds(shipment.shipping_line)
@@ -348,10 +409,25 @@ def _carrier_call_timeout(shipment: ShipmentRef):
 def _carrier_call_timeout_seconds(shipping_line: str) -> int:
     prefix = _env_prefix_for_line(shipping_line)
     if prefix:
-        line_timeout = _int_env(f"{prefix}_PER_TASK_TIMEOUT_SECONDS", default=0, min_value=0)
-        if line_timeout > 0:
+        line_timeout_key = f"{prefix}_PER_TASK_TIMEOUT_SECONDS"
+        if line_timeout_key in os.environ:
+            line_timeout = _int_env(line_timeout_key, default=0, min_value=0)
             return line_timeout
     return _int_env("SHIPMENT_PER_TASK_TIMEOUT_SECONDS", default=0, min_value=0)
+
+
+def _carrier_process_isolated(shipping_line: str) -> bool:
+    isolated_lines = _csv_env("SHIPMENT_PROCESS_ISOLATED_LINES")
+    return (shipping_line or "").strip().lower() in isolated_lines
+
+
+def _carrier_process_timeout_seconds(shipping_line: str) -> int:
+    prefix = _env_prefix_for_line(shipping_line)
+    if prefix:
+        line_timeout_key = f"{prefix}_PROCESS_TIMEOUT_SECONDS"
+        if line_timeout_key in os.environ:
+            return _int_env(line_timeout_key, default=0, min_value=0)
+    return _int_env("SHIPMENT_PROCESS_TIMEOUT_SECONDS", default=0, min_value=0)
 
 
 def _shipment_min_sync_interval_hours(shipping_line: str, default_hours: int) -> int:
@@ -729,6 +805,11 @@ def _int_env(key: str, default: int, *, min_value: int) -> int:
     except Exception:
         return default
     return parsed if parsed >= min_value else default
+
+
+def _csv_env(key: str) -> set[str]:
+    raw = os.getenv(key, "")
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
 
 def _cma_method_name_to_path(method_name: str) -> str:
