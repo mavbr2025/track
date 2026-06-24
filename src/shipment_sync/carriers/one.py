@@ -40,12 +40,19 @@ class OneAdapter(CarrierAdapter):
         self.session = requests.Session()
 
     def fetch_status(self, shipment: ShipmentRef) -> ShipmentStatus:
-        reference, ref_type_code = _pick_reference(shipment, self.booking_type_code, self.container_type_code)
-        reference = _normalize_reference(reference)
+        reference, ref_type_code, preferred_container_no = _pick_search_reference(
+            shipment,
+            self.booking_type_code,
+            self.container_type_code,
+        )
         source_url = _build_one_tracking_url(reference, ref_type_code, self.container_type_code)
 
         if self.use_edh_api:
-            edh_status = self._fetch_status_from_edh(reference, ref_type_code)
+            edh_status = self._fetch_status_from_edh(
+                reference,
+                ref_type_code,
+                preferred_container_no=preferred_container_no,
+            )
             if edh_status is not None:
                 return edh_status
 
@@ -101,7 +108,13 @@ class OneAdapter(CarrierAdapter):
             movement_details=movement_details,
         )
 
-    def _fetch_status_from_edh(self, reference: str, ref_type_code: str) -> ShipmentStatus | None:
+    def _fetch_status_from_edh(
+        self,
+        reference: str,
+        ref_type_code: str,
+        *,
+        preferred_container_no: str | None = None,
+    ) -> ShipmentStatus | None:
         source_url = _build_one_tracking_url(reference, ref_type_code, self.container_type_code)
         search_type = _to_one_search_type(ref_type_code, self.container_type_code)
         search_url = f"{self.edh_base_url}/containers/track-and-trace/search"
@@ -130,7 +143,7 @@ class OneAdapter(CarrierAdapter):
                 return self._fetch_processing_status_from_voyage(reference, source_url)
             return None
 
-        first_item = data[0] if isinstance(data[0], dict) else None
+        first_item = _pick_search_item(data, preferred_container_no=preferred_container_no)
         if not first_item:
             return None
         discovered_containers = extract_container_numbers(search_result)
@@ -330,6 +343,30 @@ def _pick_reference(shipment: ShipmentRef, booking_code: str, container_code: st
     if shipment.booking_no:
         return shipment.booking_no, booking_code
     raise ValueError("Missing booking/container number")
+
+
+def _pick_search_reference(shipment: ShipmentRef, booking_code: str, container_code: str) -> tuple[str, str, str | None]:
+    preferred_container_no = _normalize_reference(shipment.container_no) if shipment.container_no else None
+    if shipment.booking_no:
+        return _normalize_reference(shipment.booking_no), booking_code, preferred_container_no
+    if preferred_container_no:
+        return preferred_container_no, container_code, preferred_container_no
+    raise ValueError("Missing booking/container number")
+
+
+def _pick_search_item(data: list[Any], *, preferred_container_no: str | None) -> dict[str, Any] | None:
+    items = [item for item in data if isinstance(item, dict)]
+    if not items:
+        return None
+
+    preferred = (preferred_container_no or "").strip().upper()
+    if preferred:
+        for item in items:
+            container_no = _safe_text(item.get("containerNo"))
+            if container_no and container_no.strip().upper() == preferred:
+                return item
+
+    return items[0]
 
 
 def _normalize_reference(reference: str) -> str:

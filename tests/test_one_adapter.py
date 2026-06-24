@@ -38,11 +38,15 @@ class _RouteStubSession:
     def __init__(self, *, search_payload: dict, voyage_payload: dict) -> None:
         self.search_payload = search_payload
         self.voyage_payload = voyage_payload
+        self.posts: list[dict] = []
+        self.gets: list[dict] = []
 
     def post(self, url: str, json: dict, timeout: int) -> _StubResponse:
+        self.posts.append({"url": url, "json": json, "timeout": timeout})
         return _StubResponse(self.search_payload)
 
     def get(self, url: str, params: dict[str, str], timeout: int) -> _StubResponse:
+        self.gets.append({"url": url, "params": params, "timeout": timeout})
         return _StubResponse(self.voyage_payload)
 
 
@@ -246,6 +250,59 @@ def test_fetch_status_treats_empty_booking_search_with_voyage_as_processing() ->
     assert status.eta_local_text == "2026-07-29T04:00:00.000Z"
     assert status.vessel_voyage == "ONE SERENITY 2625E"
     assert status.recent_moves[0].name == "Transport Departed (DEPA)"
+
+
+def test_fetch_status_uses_booking_search_to_discover_sibling_containers() -> None:
+    session = _RouteStubSession(
+        search_payload={
+            "status": 200,
+            "code": 1,
+            "message": "Success",
+            "data": [
+                {
+                    "bookingNo": "NB6BF9831800",
+                    "containerNo": "ONEU4291087",
+                    "latestEvent": {
+                        "eventName": "Vessel Departure from Port of Loading",
+                        "locationName": "NINGBO, ZHEJIANG",
+                        "date": "2026-06-20T05:07:00.000Z",
+                        "triggerType": "ACTUAL",
+                    },
+                },
+                {
+                    "bookingNo": "NB6BF9831800",
+                    "containerNo": "ONEU4315002",
+                    "latestEvent": {
+                        "eventName": "Vessel Departure from Port of Loading",
+                        "locationName": "NINGBO, ZHEJIANG",
+                        "date": "2026-06-20T05:07:00.000Z",
+                        "triggerType": "ACTUAL",
+                    },
+                },
+            ],
+        },
+        voyage_payload={"status": 200, "code": 1, "message": "Success", "data": []},
+    )
+    adapter = OneAdapter()
+    adapter.session = session
+    shipment = ShipmentRef(
+        task_id="task-1",
+        task_name="Shipment 1",
+        shipping_line="one",
+        booking_no="NB6BF9831800",
+        container_no="ONEU4291087",
+        list_id="list-1",
+    )
+
+    status = adapter.fetch_status(shipment)
+
+    assert session.posts[0]["json"]["filters"] == {
+        "search_text": "NB6BF9831800",
+        "search_type": "BKG_NO",
+    }
+    assert status.discovered_containers == ["ONEU4291087", "ONEU4315002"]
+    assert status.latest_move is not None
+    assert status.latest_move.name == "Transport Departed (DEPA)"
 
 
 def test_plan_shipment_update_writes_vessel_voyage_field() -> None:
