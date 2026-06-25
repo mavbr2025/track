@@ -1,12 +1,49 @@
 from __future__ import annotations
 
+from shipment_sync.clickup_client import ClickUpClient
+from shipment_sync.config import DEFAULT_SHIPMENT_TERMINAL_STATUSES, Settings
+from shipment_sync.models import ShipmentRef
 from shipment_sync.sync import (
     _carrier_call_timeout_seconds,
     _carrier_process_isolated,
     _carrier_process_timeout_seconds,
     _env_prefix_for_line,
+    _run_sync,
     _shipment_min_sync_interval_hours,
+    _terminal_shipment_status,
 )
+
+
+def _settings(**overrides: object) -> Settings:
+    base = dict(
+        clickup_api_token="token",
+        clickup_oauth_access_token=None,
+        clickup_oauth_client_id=None,
+        clickup_oauth_client_secret=None,
+        clickup_oauth_redirect_uri=None,
+        clickup_list_id="list-1",
+        clickup_list_ids=["list-1"],
+        clickup_team_id=None,
+        clickup_space_ids=[],
+        clickup_folder_ids=[],
+        clickup_discover_from_spaces=False,
+        clickup_discover_from_team=False,
+        cf_container_no="container-field",
+        cf_booking_no="booking-field",
+        cf_shipping_line="carrier-field",
+        cf_shipment_status=None,
+        cf_status_last_checked="last-checked-field",
+        cf_track_trace_snapshot=None,
+        cf_eta="eta-field",
+        cf_etd="etd-field",
+        cf_discharge_date="disc-field",
+        cf_gate_in_full="gtin-full-field",
+        cf_gate_out_empty="gtot-empty-field",
+        cf_gate_out_delivery="gtot-delivery-field",
+        cf_gate_in_empty="gtin-empty-field",
+    )
+    base.update(overrides)
+    return Settings(**base)
 
 
 def test_carrier_call_timeout_prefers_line_specific_env(monkeypatch) -> None:
@@ -54,3 +91,47 @@ def test_min_sync_interval_prefers_line_specific_env(monkeypatch) -> None:
 
     assert _shipment_min_sync_interval_hours("msc", 0) == 18
     assert _shipment_min_sync_interval_hours("one", 0) == 0
+
+
+def test_terminal_shipment_status_matches_approved_names() -> None:
+    approved_statuses = [
+        "blocked",
+        "cancelado",
+        "booking canceled",
+        "booking cancelled",
+        "canceled",
+        "cancelled",
+        "vacío devuelto",
+        "vacio devuelto",
+        "empty returned",
+        "embarque cerrado",
+        "closed",
+        "completo en wf pagado",
+        "completo en wf (pagado)",
+    ]
+
+    for status in approved_statuses:
+        assert _terminal_shipment_status(status, DEFAULT_SHIPMENT_TERMINAL_STATUSES) is not None
+
+    assert _terminal_shipment_status("en almacén", DEFAULT_SHIPMENT_TERMINAL_STATUSES) is None
+    assert _terminal_shipment_status("released to consignee", DEFAULT_SHIPMENT_TERMINAL_STATUSES) is None
+
+
+def test_run_sync_prefilters_terminal_status_before_carrier_lookup() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-terminal",
+        task_name="Terminal shipment",
+        shipping_line="one",
+        booking_no="BOOK-1",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="VACIO DEVUELTO",
+    )
+
+    stats = _run_sync(client, shipments=[shipment])
+
+    assert stats.total_candidates == 0
+    assert stats.updated_items == []
+    assert stats.unchanged == 0
+    assert stats.skipped == 0

@@ -1,5 +1,21 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
+
+
+DEFAULT_SHIPMENT_TERMINAL_STATUSES = (
+    "blocked",
+    "cancelado",
+    "booking canceled",
+    "booking cancelled",
+    "canceled",
+    "cancelled",
+    "vacío devuelto",
+    "vacio devuelto",
+    "empty returned",
+    "embarque cerrado",
+    "closed",
+    "completo en wf pagado",
+)
 
 
 @dataclass
@@ -49,6 +65,9 @@ class Settings:
     recent_moves_limit: int = 0
     shipment_allowed_lines: list[str] | None = None
     shipment_excluded_lines: list[str] | None = None
+    shipment_terminal_statuses: tuple[str, ...] = field(
+        default_factory=lambda: DEFAULT_SHIPMENT_TERMINAL_STATUSES
+    )
     shipment_skip_unsupported_lines: bool = True
     shipment_preflight_enabled: bool = True
     shipment_preflight_timeout_seconds: int = 8
@@ -160,6 +179,10 @@ class Settings:
             recent_moves_limit=_int("SHIPMENT_RECENT_MOVES_LIMIT", default=0, min_value=0),
             shipment_allowed_lines=_csv_normalized("SHIPMENT_ALLOWED_LINES"),
             shipment_excluded_lines=_csv_normalized("SHIPMENT_EXCLUDED_LINES"),
+            shipment_terminal_statuses=_csv_tuple(
+                "SHIPMENT_TERMINAL_STATUSES",
+                default=DEFAULT_SHIPMENT_TERMINAL_STATUSES,
+            ),
             shipment_skip_unsupported_lines=_bool("SHIPMENT_SKIP_UNSUPPORTED_LINES", default=True),
             shipment_preflight_enabled=_bool("SHIPMENT_PREFLIGHT_ENABLED", default=True),
             shipment_preflight_timeout_seconds=_int("SHIPMENT_PREFLIGHT_TIMEOUT_SECONDS", default=8, min_value=1),
@@ -202,6 +225,13 @@ def _csv_normalized(key: str) -> list[str] | None:
     if not items:
         return None
     return list(dict.fromkeys(items))
+
+
+def _csv_tuple(key: str, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    if key not in os.environ:
+        return default
+    items = tuple(dict.fromkeys(x.strip() for x in _csv(key) if x.strip()))
+    return items or default
 
 
 def _bool(key: str, default: bool) -> bool:

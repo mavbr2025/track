@@ -9,6 +9,7 @@ import re
 import signal
 import socket
 import threading
+import unicodedata
 from urllib.parse import urlparse
 
 import requests
@@ -87,6 +88,7 @@ def _run_sync(
     prefiltered_excluded_counts: dict[str, int] = {}
     prefiltered_not_allowed_counts: dict[str, int] = {}
     prefiltered_recent_counts: dict[str, int] = {}
+    prefiltered_terminal_status_counts: dict[str, int] = {}
     unsupported_line_counts: dict[str, int] = {}
     adapter_config_counts: dict[str, int] = {}
     progress_every = _int_env("SHIPMENT_PROGRESS_EVERY", default=10, min_value=1)
@@ -122,6 +124,21 @@ def _run_sync(
                     shipment=shipment,
                     outcome="prefiltered_not_allowed",
                     message=f"Carrier {line_name} is not in SHIPMENT_ALLOWED_LINES.",
+                )
+            continue
+        terminal_status = _terminal_shipment_status(
+            shipment.current_task_status,
+            client.settings.shipment_terminal_statuses,
+        )
+        if terminal_status is not None:
+            prefiltered_terminal_status_counts[terminal_status] = (
+                prefiltered_terminal_status_counts.get(terminal_status, 0) + 1
+            )
+            if audit is not None:
+                audit.log_task(
+                    shipment=shipment,
+                    outcome="prefiltered_terminal_status",
+                    message=f"Task status {shipment.current_task_status!r} is terminal for Track & Trace.",
                 )
             continue
         min_sync_interval_hours = _shipment_min_sync_interval_hours(
@@ -291,6 +308,14 @@ def _run_sync(
         for line_name, count in sorted(prefiltered_recent_counts.items(), key=lambda item: (-item[1], item[0])):
             print(f"- {line_name}: {count} task(s)", file=sys.stderr)
 
+    if prefiltered_terminal_status_counts:
+        print("Prefiltered terminal shipment statuses:", file=sys.stderr)
+        for status_name, count in sorted(
+            prefiltered_terminal_status_counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        ):
+            print(f"- {status_name}: {count} task(s)", file=sys.stderr)
+
     if unsupported_line_counts:
         print("Skipped unsupported shipping lines:", file=sys.stderr)
         for line_name, count in sorted(unsupported_line_counts.items(), key=lambda item: (-item[1], item[0])):
@@ -316,6 +341,22 @@ def _list_label(list_name: str | None, list_id: str) -> str:
     if list_name and list_name.strip():
         return f"{list_name.strip()} ({list_id})"
     return list_id
+
+
+def _terminal_shipment_status(status: str | None, terminal_statuses: tuple[str, ...]) -> str | None:
+    normalized = _normalize_status_name(status or "")
+    if not normalized:
+        return None
+    for terminal_status in terminal_statuses:
+        if _normalize_status_name(terminal_status) == normalized:
+            return terminal_status
+    return None
+
+
+def _normalize_status_name(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value)
+    ascii_text = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", "", ascii_text.lower())
 
 
 def _fetch_carrier_status(adapter, shipment: ShipmentRef) -> ShipmentStatus:
