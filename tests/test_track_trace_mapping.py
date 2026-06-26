@@ -214,6 +214,53 @@ def test_plan_shipment_update_keeps_one_processing_booking_pending() -> None:
     assert "Booking status: Processing" in plan.comment_text
 
 
+def test_plan_shipment_update_keeps_one_unavailable_booking_pending() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-one-unavailable",
+        task_name="Shipment status ONE unavailable",
+        shipping_line="one",
+        booking_no="NB6BFP529300",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="Pendiente de booking",
+        current_field_values={
+            "etd-field": str(int(_days_from_now(13).timestamp() * 1000)),
+            "eta-field": str(int(_days_from_now(48).timestamp() * 1000)),
+        },
+    )
+    status = ShipmentStatus(status_text="ETA unavailable")
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update is None
+
+
+def test_plan_shipment_update_moves_one_explicit_confirmation_to_booking_confirmed() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-status-one-confirmed",
+        task_name="Shipment status ONE confirmed",
+        shipping_line="one",
+        booking_no="NB6BFP529300",
+        container_no=None,
+        list_id="list-1",
+        current_task_status="Pendiente de booking",
+        current_field_values={
+            "etd-field": str(int(_days_from_now(13).timestamp() * 1000)),
+            "eta-field": str(int(_days_from_now(48).timestamp() * 1000)),
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA 2026-08-13T07:00:00+00:00",
+        booking_status_text="Booking Confirmed",
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    assert plan.task_status_update == "BK confirmado"
+
+
 def test_plan_shipment_update_moves_booking_confirmed_to_collected() -> None:
     client = ClickUpClient(_settings(clickup_use_task_status=True))
     shipment = ShipmentRef(

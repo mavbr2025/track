@@ -1027,7 +1027,7 @@ def _derive_operational_status_step(
         and booking_set
         and etd_date is not None
         and eta_date is not None
-        and not _carrier_booking_is_pending(status)
+        and _carrier_booking_allows_confirmation(shipment, status)
     ):
         target_step = "booking_confirmed"
 
@@ -1065,6 +1065,25 @@ def _derive_operational_status_step(
         target_step = _max_workflow_step(target_step, "empty_returned")
 
     return target_step
+
+
+def _carrier_booking_allows_confirmation(shipment: ShipmentRef, status: ShipmentStatus) -> bool:
+    if _normalize_workflow_status_name(shipment.shipping_line or "") == "one":
+        return _carrier_booking_is_confirmed(status)
+    return not _carrier_booking_is_pending(status)
+
+
+def _carrier_booking_is_confirmed(status: ShipmentStatus) -> bool:
+    candidates = [
+        status.booking_status_text,
+        status.status_text,
+        status.movement_details,
+    ]
+    for value in candidates:
+        normalized = _normalize_workflow_status_name(value or "")
+        if normalized in {"confirmed", "bookingconfirmed", "bkconfirmed"}:
+            return True
+    return False
 
 
 def _carrier_booking_is_pending(status: ShipmentStatus) -> bool:
