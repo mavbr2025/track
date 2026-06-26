@@ -4,7 +4,7 @@ from shipment_sync.carriers.msc import _build_reference_attempts, _limit_referen
 from shipment_sync.models import ShipmentRef
 
 
-def test_msc_tries_all_container_references_before_booking() -> None:
+def test_msc_tries_booking_before_container_references() -> None:
     attempts = _build_reference_attempts(
         ShipmentRef(
             task_id="task-1",
@@ -17,10 +17,10 @@ def test_msc_tries_all_container_references_before_booking() -> None:
     )
 
     assert attempts == [
+        ("MEDUR0151668", "1"),
         ("BMOU5636281", "0"),
         ("CAIU7832977", "0"),
         ("MSCU5227020", "0"),
-        ("MEDUR0151668", "1"),
     ]
 
 
@@ -52,10 +52,25 @@ def test_msc_reference_attempt_limit_keeps_booking_fallback() -> None:
     )
 
     assert _limit_reference_attempts(attempts, limit=3) == [
+        ("MEDUR0151668", "1"),
         ("BMOU5636281", "0"),
         ("CAIU7832977", "0"),
-        ("MEDUR0151668", "1"),
     ]
+
+
+def test_msc_booking_reference_strips_non_breaking_spaces() -> None:
+    attempts = _build_reference_attempts(
+        ShipmentRef(
+            task_id="task-1",
+            task_name="MSC shipment",
+            shipping_line="msc",
+            booking_no="177WJUJUJ308516W\u00a0",
+            container_no="GAOU7846820, GAOU7964083",
+            list_id="list-1",
+        )
+    )
+
+    assert attempts[0] == ("177WJUJUJ308516W", "1")
 
 
 def test_msc_status_sets_vessel_voyage_from_final_pod_fields() -> None:

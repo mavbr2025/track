@@ -237,6 +237,11 @@ class MscAdapter(CarrierAdapter):
 
 def _build_reference_attempts(shipment: ShipmentRef) -> list[tuple[str, str]]:
     attempts: list[tuple[str, str]] = []
+    if shipment.booking_no:
+        ref = _normalize_reference(shipment.booking_no)
+        if ref:
+            # MSC UI mode "1" = Booking Number. Prefer it because it returns sibling containers.
+            attempts.append((ref, "1"))
     if shipment.container_no:
         refs = _split_container_references(shipment.container_no)
         if not refs:
@@ -244,11 +249,6 @@ def _build_reference_attempts(shipment: ShipmentRef) -> list[tuple[str, str]]:
         for ref in refs:
             # MSC UI mode "0" = Container/Bill of Lading Number.
             attempts.append((ref, "0"))
-    if shipment.booking_no:
-        ref = _normalize_reference(shipment.booking_no)
-        if ref:
-            # MSC UI mode "1" = Booking Number.
-            attempts.append((ref, "1"))
     return _dedupe_reference_attempts(attempts)
 
 
