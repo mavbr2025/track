@@ -529,21 +529,6 @@ class ClickUpClient:
         eta_port_local_text = _format_port_local_time(status.eta_local_text, status.eta_time)
         status_value = f"ETA {eta_text}" if self.settings.eta_only_mode else status.status_text
         source_link = status.source_url or _extract_first_url(status.raw_source)
-        snapshot_hash = _compute_snapshot_hash(
-            shipment=shipment,
-            status=status,
-            status_value=status_value,
-            eta_text=eta_text,
-            eta_port_local_text=eta_port_local_text,
-        )
-
-        previous_snapshot_hash = (shipment.track_trace_snapshot_hash or "").strip() or None
-        previous_status_value = (shipment.current_status_value or "").strip() or None
-        changed = True
-        if previous_snapshot_hash and previous_snapshot_hash == snapshot_hash:
-            changed = False
-        elif not previous_snapshot_hash and previous_status_value and previous_status_value == status_value:
-            changed = False
 
         always_field_updates: list[ShipmentFieldWrite] = []
         candidate_field_updates: list[ShipmentFieldWrite] = []
@@ -565,6 +550,42 @@ class ClickUpClient:
                     label="Last T&T Update",
                 )
             )
+        container_update = _build_container_field_update(
+            shipment=shipment,
+            status=status,
+            field_id=self.settings.cf_container_no,
+        )
+        if container_update is not None:
+            candidate_field_updates.append(container_update)
+        candidate_field_updates.extend(_build_direct_event_field_updates(status=status, settings=self.settings))
+        effective_field_values = _effective_field_values(
+            shipment.current_field_values,
+            candidate_field_updates,
+        )
+        vessel_voyage_value = _effective_vessel_voyage(
+            shipment=shipment,
+            status=status,
+            settings=self.settings,
+            field_values=effective_field_values,
+            now_utc=now_utc,
+        )
+        if self.settings.cf_vessel_voyage and vessel_voyage_value:
+            candidate_field_updates.append(
+                ShipmentFieldWrite(
+                    field_id=self.settings.cf_vessel_voyage,
+                    value=vessel_voyage_value,
+                    field_type="text",
+                    label="Vessel/Voyage",
+                )
+            )
+        snapshot_hash = _compute_snapshot_hash(
+            shipment=shipment,
+            status=status,
+            status_value=status_value,
+            eta_text=eta_text,
+            eta_port_local_text=eta_port_local_text,
+            vessel_voyage_value=vessel_voyage_value,
+        )
         if self.settings.cf_track_trace_snapshot:
             candidate_field_updates.append(
                 ShipmentFieldWrite(
@@ -574,23 +595,15 @@ class ClickUpClient:
                     label="Track & Trace snapshot",
                 )
             )
-        container_update = _build_container_field_update(
-            shipment=shipment,
-            status=status,
-            field_id=self.settings.cf_container_no,
-        )
-        if container_update is not None:
-            candidate_field_updates.append(container_update)
-        if self.settings.cf_vessel_voyage and status.vessel_voyage:
-            candidate_field_updates.append(
-                ShipmentFieldWrite(
-                    field_id=self.settings.cf_vessel_voyage,
-                    value=status.vessel_voyage,
-                    field_type="text",
-                    label="Vessel/Voyage",
-                )
-            )
-        candidate_field_updates.extend(_build_direct_event_field_updates(status=status, settings=self.settings))
+
+        previous_snapshot_hash = (shipment.track_trace_snapshot_hash or "").strip() or None
+        previous_status_value = (shipment.current_status_value or "").strip() or None
+        changed = True
+        if previous_snapshot_hash and previous_snapshot_hash == snapshot_hash:
+            changed = False
+        elif not previous_snapshot_hash and previous_status_value and previous_status_value == status_value:
+            changed = False
+
         candidate_field_updates = _dedupe_field_updates(candidate_field_updates)
         changed_field_updates = [
             update
@@ -623,8 +636,8 @@ class ClickUpClient:
             ]
             if source_link:
                 comment_lines.append(f"Carrier source: {source_link}")
-            if status.vessel_voyage:
-                comment_lines.append(f"Vessel/Voyage: {status.vessel_voyage}")
+            if vessel_voyage_value:
+                comment_lines.append(f"Vessel/Voyage: {vessel_voyage_value}")
             if status.booking_status_text:
                 comment_lines.append(f"Booking status: {status.booking_status_text}")
             if recent_moves:
@@ -658,8 +671,8 @@ class ClickUpClient:
                 comment_lines.append(f"Event time (UTC): {status.event_time.isoformat()}")
             if status.movement_details:
                 comment_lines.append(f"Last movement details: {status.movement_details}")
-            if status.vessel_voyage:
-                comment_lines.append(f"Vessel/Voyage: {status.vessel_voyage}")
+            if vessel_voyage_value:
+                comment_lines.append(f"Vessel/Voyage: {vessel_voyage_value}")
             if status.booking_status_text:
                 comment_lines.append(f"Booking status: {status.booking_status_text}")
             if recent_moves:
@@ -1063,6 +1076,18 @@ def _derive_operational_status_step(
     if gate_out_empty_date is not None and gate_in_full_date is not None and etd_date is not None:
         if etd_date > today:
             target_step = _max_workflow_step(target_step, "origin_port")
+            if eta_date is not None and eta_date > today and _has_origin_barge_transit_move(
+                shipment=shipment,
+                status=status,
+                settings=settings,
+                field_values=field_values,
+                now_utc=now_utc,
+                current_step=current_step,
+            ):
+                target_step = _max_workflow_step(target_step, "in_transit")
+                days_until_eta = (eta_date - today).days
+                if 5 <= days_until_eta <= 10:
+                    target_step = _max_workflow_step(target_step, "arriving")
         elif eta_date is not None and eta_date > today:
             target_step = _max_workflow_step(target_step, "in_transit")
             days_until_eta = (eta_date - today).days
@@ -1091,6 +1116,93 @@ def _derive_operational_status_step(
         target_step = _max_workflow_step(target_step, "empty_returned")
 
     return target_step
+
+
+def _effective_field_values(
+    current_values: dict[str, Any],
+    candidate_field_updates: list[ShipmentFieldWrite],
+) -> dict[str, Any]:
+    values = dict(current_values)
+    for update in candidate_field_updates:
+        values[update.field_id] = update.value
+    return values
+
+
+def _effective_vessel_voyage(
+    *,
+    shipment: ShipmentRef,
+    status: ShipmentStatus,
+    settings: Settings,
+    field_values: dict[str, Any],
+    now_utc: datetime,
+) -> str | None:
+    carrier_vessel_voyage = (status.vessel_voyage or "").strip()
+    if carrier_vessel_voyage:
+        return carrier_vessel_voyage
+
+    if _has_origin_barge_transit_move(
+        shipment=shipment,
+        status=status,
+        settings=settings,
+        field_values=field_values,
+        now_utc=now_utc,
+        current_step=None,
+    ):
+        return "BARGE"
+
+    return None
+
+
+def _has_origin_barge_transit_move(
+    *,
+    shipment: ShipmentRef,
+    status: ShipmentStatus,
+    settings: Settings,
+    field_values: dict[str, Any],
+    now_utc: datetime,
+    current_step: str | None,
+) -> bool:
+    if current_step is not None and current_step not in {"booking_confirmed", "collected", "origin_port"}:
+        return False
+
+    if not (shipment.shipping_line or "").strip():
+        return False
+
+    eta_date = _field_date(settings.cf_eta, field_values)
+    if eta_date is None and status.eta_time is not None:
+        eta_date = status.eta_time.astimezone(timezone.utc).date()
+    if eta_date is not None and eta_date <= now_utc.date():
+        return False
+
+    gate_out_empty_date = _field_date(settings.cf_gate_out_empty, field_values)
+    gate_in_full_date = _field_date(settings.cf_gate_in_full, field_values)
+    if gate_out_empty_date is None or gate_in_full_date is None:
+        return False
+
+    etd_date = _field_date(settings.cf_etd, field_values)
+    ordered_moves = _order_moves_ascending(status.recent_moves)
+    if not ordered_moves:
+        return False
+
+    for idx, move in enumerate(ordered_moves):
+        code = _event_code_from_move(move)
+        if code not in {"LOAD", "DEPA", "ARRI", "DISC"}:
+            continue
+        move_date = _move_event_date(move)
+        if move_date is None or move_date < gate_in_full_date:
+            continue
+        if not _move_is_effectively_actual(move, now_utc=now_utc):
+            continue
+
+        if etd_date is not None and etd_date > now_utc.date() and move_date < etd_date:
+            return True
+
+        later_departure = _next_departure_after(ordered_moves, idx)
+        later_departure_date = _move_event_date(later_departure)
+        if later_departure_date is not None and later_departure_date > move_date:
+            return True
+
+    return False
 
 
 def _carrier_booking_allows_confirmation(shipment: ShipmentRef, status: ShipmentStatus) -> bool:
@@ -1445,6 +1557,32 @@ def _move_is_actual(move: MovementEvent) -> bool:
     return _normalize_event_state(move.event_state) == "actual"
 
 
+def _move_is_effectively_actual(move: MovementEvent, *, now_utc: datetime) -> bool:
+    state = _normalize_event_state(move.event_state)
+    if state == "actual":
+        return True
+    if state == "estimated":
+        return False
+    move_date = _move_event_date(move)
+    return move_date is not None and move_date <= now_utc.date()
+
+
+def _move_event_date(move: MovementEvent | None) -> date | None:
+    if move is None:
+        return None
+    coerced = _coerce_display_date(move.event_time_local_text, move.event_time)
+    if coerced is not None:
+        return coerced.astimezone(timezone.utc).date()
+    return None
+
+
+def _next_departure_after(moves: list[MovementEvent], index: int) -> MovementEvent | None:
+    for move in moves[index + 1 :]:
+        if _event_code_from_move(move) == "DEPA":
+            return move
+    return None
+
+
 def _is_open_task(task: dict[str, Any]) -> bool:
     status_obj = task.get("status") if isinstance(task.get("status"), dict) else {}
     status_type = str(status_obj.get("type") or "").strip().lower()
@@ -1692,6 +1830,7 @@ def _compute_snapshot_hash(
     status_value: str,
     eta_text: str,
     eta_port_local_text: str,
+    vessel_voyage_value: str | None = None,
 ) -> str:
     latest_move = status.latest_move
     snapshot = {
@@ -1703,7 +1842,7 @@ def _compute_snapshot_hash(
         "location": status.location or "",
         "event_time": status.event_time.isoformat() if status.event_time else "",
         "movement_details": status.movement_details or "",
-        "vessel_voyage": status.vessel_voyage or "",
+        "vessel_voyage": vessel_voyage_value or status.vessel_voyage or "",
         "booking_status_text": status.booking_status_text or "",
         "latest_move_name": latest_move.name if latest_move else "",
         "latest_move_location": latest_move.location if latest_move else "",

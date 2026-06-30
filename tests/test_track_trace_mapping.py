@@ -474,6 +474,155 @@ def test_plan_shipment_update_moves_origin_port_to_transit_when_etd_passes() -> 
     assert plan.task_status_update == "Tránsito"
 
 
+def test_plan_shipment_update_moves_origin_port_to_transit_for_origin_barge_leg() -> None:
+    client = ClickUpClient(
+        _settings(
+            clickup_use_task_status=True,
+            cf_vessel_voyage="vessel-voyage-field",
+        )
+    )
+    shipment = ShipmentRef(
+        task_id="task-status-barge-transit",
+        task_name="Shipment status barge transit",
+        shipping_line="msc",
+        booking_no="BOOK-BARGE",
+        container_no="CONT-BARGE",
+        list_id="list-1",
+        current_task_status="En puerto Origen",
+        current_field_values={
+            "gtot-empty-field": _ms_days_from_now(-10),
+            "gtin-full-field": _ms_days_from_now(-9),
+            "etd-field": _ms_days_from_now(6),
+            "eta-field": _ms_days_from_now(42),
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA future",
+        eta_time=_days_from_now(42),
+        recent_moves=[
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="PUERTO CORTES, HN",
+                event_time=_days_from_now(42),
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, CN",
+                event_time=_days_from_now(6),
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="SHANGHAI, CN",
+                event_time=_days_from_now(-2),
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="YANGZHOU, CN",
+                event_time=_days_from_now(-8),
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert plan.task_status_update == "Tránsito"
+    assert updates["Vessel/Voyage"].value == "BARGE"
+
+
+def test_plan_shipment_update_keeps_final_vessel_over_barge_marker() -> None:
+    client = ClickUpClient(
+        _settings(
+            clickup_use_task_status=True,
+            cf_vessel_voyage="vessel-voyage-field",
+        )
+    )
+    shipment = ShipmentRef(
+        task_id="task-status-final-vessel",
+        task_name="Shipment status final vessel",
+        shipping_line="msc",
+        booking_no="BOOK-FINAL",
+        container_no="CONT-FINAL",
+        list_id="list-1",
+        current_task_status="En puerto Origen",
+        current_field_values={
+            "gtot-empty-field": _ms_days_from_now(-10),
+            "gtin-full-field": _ms_days_from_now(-9),
+            "etd-field": _ms_days_from_now(6),
+            "eta-field": _ms_days_from_now(42),
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA future",
+        eta_time=_days_from_now(42),
+        vessel_voyage="MSC FINAL FV123A",
+        recent_moves=[
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, CN",
+                event_time=_days_from_now(6),
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="YANGZHOU, CN",
+                event_time=_days_from_now(-8),
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert plan.task_status_update == "Tránsito"
+    assert updates["Vessel/Voyage"].value == "MSC FINAL FV123A"
+
+
+def test_plan_shipment_update_does_not_move_origin_port_for_future_etd_without_barge_leg() -> None:
+    client = ClickUpClient(
+        _settings(
+            clickup_use_task_status=True,
+            cf_vessel_voyage="vessel-voyage-field",
+        )
+    )
+    shipment = ShipmentRef(
+        task_id="task-status-no-barge",
+        task_name="Shipment status no barge",
+        shipping_line="msc",
+        booking_no="BOOK-NO-BARGE",
+        container_no="CONT-NO-BARGE",
+        list_id="list-1",
+        current_task_status="En puerto Origen",
+        current_field_values={
+            "gtot-empty-field": _ms_days_from_now(-10),
+            "gtin-full-field": _ms_days_from_now(-9),
+            "etd-field": _ms_days_from_now(6),
+            "eta-field": _ms_days_from_now(42),
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA future",
+        eta_time=_days_from_now(42),
+        recent_moves=[
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="PUERTO CORTES, HN",
+                event_time=_days_from_now(42),
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, CN",
+                event_time=_days_from_now(6),
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert plan.task_status_update is None
+    assert "Vessel/Voyage" not in updates
+
+
 def test_plan_shipment_update_moves_transit_to_arriving_inside_eta_window() -> None:
     client = ClickUpClient(_settings(clickup_use_task_status=True))
     shipment = ShipmentRef(
