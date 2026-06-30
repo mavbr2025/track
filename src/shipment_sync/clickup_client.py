@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from datetime import date, datetime, timezone
 import re
@@ -39,6 +40,31 @@ class ClickUpClient:
         self._list_field_cache: dict[str, list[dict[str, Any]]] = {}
         self._carrier_filter_warning_lists: set[str] = set()
         self._discovery_warning_keys: set[str] = set()
+
+    def _request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        max_retries = _env_int("CLICKUP_REQUEST_MAX_RETRIES", default=4, minimum=0)
+        retry_delay_seconds = _env_float("CLICKUP_REQUEST_RETRY_DELAY_SECONDS", default=2.0, minimum=0.0)
+        request_method = getattr(self.session, method)
+        last_error: requests.RequestException | None = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                return request_method(url, **kwargs)
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                sleep_seconds = min(retry_delay_seconds * (2**attempt), 30.0)
+                print(
+                    f"ClickUp {method.upper()} {url} failed on attempt {attempt + 1}/{max_retries + 1}: "
+                    f"{exc}. Retrying in {sleep_seconds:g}s.",
+                    file=sys.stderr,
+                )
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
+
+        assert last_error is not None
+        raise last_error
 
     def list_shipments(self) -> list[ShipmentRef]:
         target_lists = self._resolve_target_lists()
@@ -340,7 +366,7 @@ class ClickUpClient:
 
     def _fetch_team_space_ids(self, team_id: str) -> list[str]:
         url = f"{self.base_url}/team/{team_id}/space"
-        response = self.session.get(url, timeout=30)
+        response = self._request("get", url, timeout=30)
         response.raise_for_status()
         spaces = response.json().get("spaces", [])
         ids: list[str] = []
@@ -352,19 +378,19 @@ class ClickUpClient:
 
     def _fetch_space_folders(self, space_id: str) -> list[dict[str, Any]]:
         url = f"{self.base_url}/space/{space_id}/folder"
-        response = self.session.get(url, timeout=30)
+        response = self._request("get", url, timeout=30)
         response.raise_for_status()
         return response.json().get("folders", [])
 
     def _fetch_folder_lists(self, folder_id: str) -> list[dict[str, Any]]:
         url = f"{self.base_url}/folder/{folder_id}/list"
-        response = self.session.get(url, timeout=30)
+        response = self._request("get", url, timeout=30)
         response.raise_for_status()
         return response.json().get("lists", [])
 
     def _fetch_space_folderless_lists(self, space_id: str) -> list[dict[str, Any]]:
         url = f"{self.base_url}/space/{space_id}/list"
-        response = self.session.get(url, timeout=30)
+        response = self._request("get", url, timeout=30)
         response.raise_for_status()
         return response.json().get("lists", [])
 
@@ -424,7 +450,7 @@ class ClickUpClient:
         while True:
             params = dict(base_params)
             params["page"] = str(page)
-            response = self.session.get(url, params=params, timeout=30)
+            response = self._request("get", url, params=params, timeout=30)
             response.raise_for_status()
             payload = response.json()
             batch = payload.get("tasks", [])
@@ -488,7 +514,7 @@ class ClickUpClient:
         if cached is not None:
             return cached
         url = f"{self.base_url}/list/{list_id}/field"
-        response = self.session.get(url, timeout=30)
+        response = self._request("get", url, timeout=30)
         response.raise_for_status()
         fields = response.json().get("fields", [])
         if not isinstance(fields, list):
@@ -709,7 +735,7 @@ class ClickUpClient:
 
     def _set_custom_field(self, task_id: str, field_id: str, value: str) -> None:
         url = f"{self.base_url}/task/{task_id}/field/{field_id}"
-        response = self.session.post(url, json={"value": value}, timeout=30)
+        response = self._request("post", url, json={"value": value}, timeout=30)
         response.raise_for_status()
 
     def _set_date_custom_field(self, task_id: str, field_id: str, value: datetime | None, *, include_time: bool) -> None:
@@ -717,17 +743,17 @@ class ClickUpClient:
         payload: dict[str, Any] = {"value": None if value is None else int(value.timestamp() * 1000)}
         if include_time and value is not None:
             payload["value_options"] = {"time": True}
-        response = self.session.post(url, json=payload, timeout=30)
+        response = self._request("post", url, json=payload, timeout=30)
         response.raise_for_status()
 
     def _set_task_status(self, task_id: str, status_name: str) -> None:
         url = f"{self.base_url}/task/{task_id}"
-        response = self.session.put(url, json={"status": status_name}, timeout=30)
+        response = self._request("put", url, json={"status": status_name}, timeout=30)
         response.raise_for_status()
 
     def _post_comment(self, task_id: str, comment: str) -> None:
         url = f"{self.base_url}/task/{task_id}/comment"
-        response = self.session.post(url, json={"comment_text": comment, "notify_all": False}, timeout=30)
+        response = self._request("post", url, json={"comment_text": comment, "notify_all": False}, timeout=30)
         response.raise_for_status()
 
 
@@ -1628,6 +1654,26 @@ def _name_or_none(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _env_int(key: str, *, default: int, minimum: int) -> int:
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        return default
+
+
+def _env_float(key: str, *, default: float, minimum: float) -> float:
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(minimum, float(raw))
+    except ValueError:
+        return default
 
 
 def _extract_first_url(value: str | None) -> str | None:

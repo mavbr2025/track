@@ -94,6 +94,18 @@ class _FakeSession:
         raise AssertionError(f"unexpected URL: {url}")
 
 
+class _FlakyFieldSession(_FakeSession):
+    def __init__(self, *, task_responses: list[_FakeResponse]) -> None:
+        super().__init__(task_responses=task_responses)
+        self.field_failures_remaining = 1
+
+    def get(self, url: str, *, params: dict[str, str] | None = None, timeout: int) -> _FakeResponse:
+        if url.endswith("/list/list-1/field") and self.field_failures_remaining > 0:
+            self.field_failures_remaining -= 1
+            raise requests.ConnectionError("temporary DNS failure")
+        return super().get(url, params=params, timeout=timeout)
+
+
 class _DiscoverySession:
     def __init__(self, *, fail_on_get: bool = False):
         self.headers: dict[str, str] = {}
@@ -232,6 +244,25 @@ def test_list_shipments_falls_back_when_clickup_rejects_prefilter() -> None:
     assert "custom_fields" in task_calls[0][1]
     assert task_calls[1][1] is not None
     assert "custom_fields" not in task_calls[1][1]
+
+
+def test_list_shipments_retries_transient_clickup_network_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLICKUP_REQUEST_MAX_RETRIES", "2")
+    monkeypatch.setenv("CLICKUP_REQUEST_RETRY_DELAY_SECONDS", "0")
+    client = ClickUpClient(_settings(shipment_allowed_lines=["one"]))
+    fake_session = _FlakyFieldSession(
+        task_responses=[
+            _FakeResponse({"tasks": [_task()], "last_page": True}),
+        ]
+    )
+    client.session = fake_session  # type: ignore[assignment]
+
+    shipments = client.list_shipments()
+
+    assert [shipment.task_id for shipment in shipments] == ["task-1"]
+    field_calls = [call for call in fake_session.calls if call[0].endswith("/field")]
+    assert len(field_calls) == 1
+    assert fake_session.field_failures_remaining == 0
 
 
 def test_discovered_lists_are_schema_validated_and_cached(tmp_path) -> None:
