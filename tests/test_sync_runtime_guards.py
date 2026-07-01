@@ -11,6 +11,7 @@ from shipment_sync.sync import (
     _run_sync,
     _shipment_min_sync_interval_hours,
     _terminal_shipment_status,
+    _wan_hai_manual_capture_needed,
 )
 
 
@@ -135,3 +136,50 @@ def test_run_sync_prefilters_terminal_status_before_carrier_lookup() -> None:
     assert stats.updated_items == []
     assert stats.unchanged == 0
     assert stats.skipped == 0
+
+
+def test_wan_hai_manual_capture_detector_matches_antibot_errors() -> None:
+    assert _wan_hai_manual_capture_needed(
+        "Wan Hai",
+        "WanHaiAntiBotBlocked: Wan Hai tracking page blocked by anti-bot protection",
+    )
+    assert _wan_hai_manual_capture_needed("wan hai", "query form not available")
+    assert not _wan_hai_manual_capture_needed("one", "blocked by anti-bot protection")
+    assert not _wan_hai_manual_capture_needed("wan hai", "returned no results")
+
+
+def test_run_sync_requests_wan_hai_manual_capture_on_antibot(monkeypatch) -> None:
+    class _BlockedWanHaiAdapter:
+        def fetch_status(self, shipment: ShipmentRef):
+            raise ValueError("WanHaiAntiBotBlocked: Wan Hai tracking page blocked by anti-bot protection")
+
+    class _ManualCaptureClient(ClickUpClient):
+        def __init__(self) -> None:
+            super().__init__(_settings())
+            self.manual_capture_requests: list[tuple[str, str | None]] = []
+
+        def request_wan_hai_manual_capture(self, shipment: ShipmentRef, *, error: str | None = None) -> bool:
+            self.manual_capture_requests.append((shipment.task_id, error))
+            return True
+
+    monkeypatch.setattr(
+        "shipment_sync.sync.build_carrier_registry",
+        lambda: {"wan hai": _BlockedWanHaiAdapter()},
+    )
+    client = _ManualCaptureClient()
+    shipment = ShipmentRef(
+        task_id="task-wan-hai",
+        task_name="Wan Hai shipment",
+        shipping_line="wan hai",
+        booking_no="027G709927",
+        container_no=None,
+        list_id="list-1",
+    )
+
+    stats = _run_sync(client, shipments=[shipment])
+
+    assert stats.total_candidates == 1
+    assert stats.skipped == 1
+    assert client.manual_capture_requests == [
+        ("task-wan-hai", "WanHaiAntiBotBlocked: Wan Hai tracking page blocked by anti-bot protection")
+    ]

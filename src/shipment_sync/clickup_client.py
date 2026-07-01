@@ -544,6 +544,13 @@ class ClickUpClient:
         return _extract_wan_hai_reference_hints("\n".join(comment_texts))
 
     def _fetch_recent_task_comment_texts(self, task_id: str, *, limit: int) -> list[str]:
+        comments = self._fetch_recent_task_comments(task_id, limit=limit)
+        texts: list[str] = []
+        for raw in comments:
+            texts.extend(_comment_reference_texts(raw))
+        return texts
+
+    def _fetch_recent_task_comments(self, task_id: str, *, limit: int) -> list[dict[str, Any]]:
         url = f"{self.base_url}/task/{task_id}/comment"
         response = self._request("get", url, timeout=30)
         response.raise_for_status()
@@ -551,12 +558,12 @@ class ClickUpClient:
         if not isinstance(raw_comments, list):
             return []
 
-        texts: list[str] = []
+        comments: list[dict[str, Any]] = []
         for raw in raw_comments[: max(0, limit)]:
             if not isinstance(raw, dict):
                 continue
-            texts.extend(_comment_reference_texts(raw))
-        return texts
+            comments.append(raw)
+        return comments
 
     def plan_shipment_update(self, shipment: ShipmentRef, status: ShipmentStatus) -> ShipmentUpdatePlan:
         now_utc = datetime.now(timezone.utc)
@@ -781,6 +788,40 @@ class ClickUpClient:
             status_value=plan.status_value,
             snapshot_hash=plan.snapshot_hash,
         )
+
+    def request_wan_hai_manual_capture(self, shipment: ShipmentRef, *, error: str | None = None) -> bool:
+        if not self.settings.wan_hai_manual_capture_comment:
+            return False
+        if self._recent_wan_hai_manual_capture_comment_exists(shipment.task_id):
+            return False
+        self._post_comment(shipment.task_id, _wan_hai_manual_capture_comment(shipment, self.settings, error=error))
+        return True
+
+    def _recent_wan_hai_manual_capture_comment_exists(self, task_id: str) -> bool:
+        cooldown_hours = self.settings.wan_hai_manual_capture_comment_cooldown_hours
+        if cooldown_hours <= 0:
+            return False
+        try:
+            comments = self._fetch_recent_task_comments(task_id, limit=10)
+        except requests.RequestException as exc:
+            print(
+                f"Wan Hai manual capture cooldown check skipped for task {task_id}: {exc}",
+                file=sys.stderr,
+            )
+            return False
+
+        now_utc = datetime.now(timezone.utc)
+        for raw in comments:
+            text = "\n".join(_comment_reference_texts(raw))
+            if "Wan Hai Manual Capture needed" not in text:
+                continue
+            created_at = _parse_datetime_value(raw.get("date"))
+            if created_at is None:
+                return True
+            age_hours = (now_utc - created_at).total_seconds() / 3600
+            if age_hours <= cooldown_hours:
+                return True
+        return False
 
     def _set_custom_field(self, task_id: str, field_id: str, value: str) -> None:
         url = f"{self.base_url}/task/{task_id}/field/{field_id}"
@@ -1833,6 +1874,41 @@ def _name_or_none(value: Any) -> str | None:
 def _is_wan_hai_line(value: str | None) -> bool:
     normalized = _normalize_carrier_filter_label(value or "")
     return normalized in {"wanhai", "wanhailines", "whl"}
+
+
+def _wan_hai_manual_capture_comment(shipment: ShipmentRef, settings: Settings, *, error: str | None) -> str:
+    references = _manual_capture_references(shipment)
+    lines = [
+        "Wan Hai Manual Capture needed",
+        "",
+        "Automated Track & Trace could not access Wan Hai for this shipment.",
+        f"Wan Hai website: {settings.wan_hai_manual_capture_url}",
+        "",
+        "Action required:",
+        "1. Open the Wan Hai website and search this shipment.",
+        "2. Copy and paste the entire Wan Hai result screen/page into this ClickUp task.",
+        "3. Mention TracyAI in the comment so TracyAI can update the shipment fields from the pasted screen.",
+    ]
+    if references:
+        lines.extend(["", f"References to try: {', '.join(references)}"])
+    if error:
+        lines.extend(["", f"Automation error: {error}"])
+    return "\n".join(lines)
+
+
+def _manual_capture_references(shipment: ShipmentRef) -> list[str]:
+    refs: list[str] = []
+    for value in [shipment.booking_no, shipment.container_no, *shipment.reference_hints]:
+        if not value:
+            continue
+        for token in re.split(r"[,\s]+", str(value)):
+            token = token.strip()
+            if not token:
+                continue
+            key = token.upper()
+            if key not in {ref.upper() for ref in refs}:
+                refs.append(token)
+    return refs
 
 
 def _comment_reference_texts(raw: dict[str, Any]) -> list[str]:

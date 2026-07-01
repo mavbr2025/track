@@ -77,6 +77,9 @@ class Settings:
     shipment_audit_source: str | None = None
     wan_hai_reference_hints_from_comments: bool = True
     wan_hai_reference_comment_limit: int = 5
+    wan_hai_manual_capture_comment: bool = True
+    wan_hai_manual_capture_comment_cooldown_hours: int = 24
+    wan_hai_manual_capture_url: str = "https://www.wanhai.com/views/quick/cargo_tracking.xhtml"
     clickup_discovery_validate_schema: bool = True
     clickup_discovery_list_name_include: list[str] | None = None
     clickup_discovery_list_name_exclude: list[str] | None = None
@@ -194,6 +197,16 @@ class Settings:
             shipment_audit_source=_optional("SHIPMENT_AUDIT_SOURCE"),
             wan_hai_reference_hints_from_comments=_bool("WAN_HAI_REFERENCE_HINTS_FROM_COMMENTS", default=True),
             wan_hai_reference_comment_limit=_int("WAN_HAI_REFERENCE_COMMENT_LIMIT", default=5, min_value=0),
+            wan_hai_manual_capture_comment=_bool("WAN_HAI_MANUAL_CAPTURE_COMMENT", default=True),
+            wan_hai_manual_capture_comment_cooldown_hours=_int(
+                "WAN_HAI_MANUAL_CAPTURE_COMMENT_COOLDOWN_HOURS",
+                default=24,
+                min_value=0,
+            ),
+            wan_hai_manual_capture_url=os.getenv(
+                "WAN_HAI_MANUAL_CAPTURE_URL",
+                "https://www.wanhai.com/views/quick/cargo_tracking.xhtml",
+            ),
         )
 
 

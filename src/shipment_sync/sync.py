@@ -281,6 +281,20 @@ def _run_sync(
                     )
                 skipped += 1
                 continue
+            if _wan_hai_manual_capture_needed(shipment.shipping_line, message):
+                try:
+                    posted = client.request_wan_hai_manual_capture(shipment, error=message)
+                except Exception as comment_exc:
+                    posted = False
+                    print(
+                        f"Wan Hai manual capture comment failed for task {shipment.task_id}: {comment_exc}",
+                        file=sys.stderr,
+                    )
+                if posted:
+                    print(
+                        f"Wan Hai manual capture requested for task {shipment.task_id} ({shipment.task_name}).",
+                        file=sys.stderr,
+                    )
             print(
                 f"Skipped task {shipment.task_id} ({shipment.task_name}): {exc}",
                 file=sys.stderr,
@@ -357,6 +371,22 @@ def _normalize_status_name(value: str) -> str:
     decomposed = unicodedata.normalize("NFKD", value)
     ascii_text = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     return re.sub(r"[^a-z0-9]+", "", ascii_text.lower())
+
+
+def _wan_hai_manual_capture_needed(shipping_line: str, message: str) -> bool:
+    if _normalize_status_name(shipping_line) not in {"wanhai", "wanhailines", "whl"}:
+        return False
+    normalized_message = message.lower()
+    markers = (
+        "anti-bot",
+        "antibot",
+        "incapsula",
+        "imperva",
+        "query form not available",
+        "blocked by",
+        "wanhaiantibotblocked",
+    )
+    return any(marker in normalized_message for marker in markers)
 
 
 def _fetch_carrier_status(adapter, shipment: ShipmentRef) -> ShipmentStatus:
