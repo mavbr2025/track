@@ -17,6 +17,7 @@ class ShipmentRef:
     current_task_status: str | None = None
     track_trace_snapshot_hash: str | None = None
     current_field_values: dict[str, Any] = field(default_factory=dict)
+    reference_hints: list[str] = field(default_factory=list)
 
 
 @dataclass

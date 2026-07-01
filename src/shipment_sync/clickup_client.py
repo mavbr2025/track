@@ -128,8 +128,12 @@ class ClickUpClient:
 
             if not shipping_line:
                 continue
+            reference_hints: list[str] = []
+            if _is_wan_hai_line(shipping_line) and self.settings.wan_hai_reference_hints_from_comments:
+                reference_hints = self._fetch_wan_hai_reference_hints(str(task.get("id") or ""))
             if not booking_no and not container_no:
-                continue
+                if not reference_hints:
+                    continue
 
             list_obj = task.get("list") if isinstance(task.get("list"), dict) else {}
             list_id = str(list_obj.get("id") or "")
@@ -155,6 +159,7 @@ class ClickUpClient:
                         field_id: field_payload.get("value")
                         for field_id, field_payload in fields.items()
                     },
+                    reference_hints=reference_hints,
                 )
             )
         print(f"ClickUp candidate shipment tasks: {len(shipments)}", file=sys.stderr)
@@ -521,6 +526,37 @@ class ClickUpClient:
             fields = []
         self._list_field_cache[list_id] = fields
         return fields
+
+    def _fetch_wan_hai_reference_hints(self, task_id: str) -> list[str]:
+        if not task_id or self.settings.wan_hai_reference_comment_limit <= 0:
+            return []
+        try:
+            comment_texts = self._fetch_recent_task_comment_texts(
+                task_id,
+                limit=self.settings.wan_hai_reference_comment_limit,
+            )
+        except requests.RequestException as exc:
+            print(
+                f"Wan Hai reference hint lookup skipped for task {task_id}: {exc}",
+                file=sys.stderr,
+            )
+            return []
+        return _extract_wan_hai_reference_hints("\n".join(comment_texts))
+
+    def _fetch_recent_task_comment_texts(self, task_id: str, *, limit: int) -> list[str]:
+        url = f"{self.base_url}/task/{task_id}/comment"
+        response = self._request("get", url, timeout=30)
+        response.raise_for_status()
+        raw_comments = response.json().get("comments")
+        if not isinstance(raw_comments, list):
+            return []
+
+        texts: list[str] = []
+        for raw in raw_comments[: max(0, limit)]:
+            if not isinstance(raw, dict):
+                continue
+            texts.extend(_comment_reference_texts(raw))
+        return texts
 
     def plan_shipment_update(self, shipment: ShipmentRef, status: ShipmentStatus) -> ShipmentUpdatePlan:
         now_utc = datetime.now(timezone.utc)
@@ -1792,6 +1828,78 @@ def _name_or_none(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _is_wan_hai_line(value: str | None) -> bool:
+    normalized = _normalize_carrier_filter_label(value or "")
+    return normalized in {"wanhai", "wanhailines", "whl"}
+
+
+def _comment_reference_texts(raw: dict[str, Any]) -> list[str]:
+    texts: list[str] = []
+    comment_text = raw.get("comment_text")
+    if isinstance(comment_text, str) and comment_text.strip():
+        texts.append(comment_text)
+
+    comment_parts = raw.get("comment")
+    if isinstance(comment_parts, list):
+        for part in comment_parts:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                texts.append(text)
+            attachment = part.get("attachment")
+            if isinstance(attachment, dict):
+                for key in ("title", "url", "url_w_query", "url_w_host"):
+                    value = attachment.get(key)
+                    if isinstance(value, str) and value.strip():
+                        texts.append(value)
+
+    for key in ("text_content", "markdown_description"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            texts.append(value)
+    return texts
+
+
+def _extract_wan_hai_reference_hints(text: str) -> list[str]:
+    if not text:
+        return []
+
+    patterns = [
+        r"\b(?:BK|BOOKING|BOOK(?:ING)?\s*NO\.?)\s*#?\s*[:\-]?\s*([A-Z0-9][A-Z0-9/-]{5,30})",
+        r"\b(?:MBL|M/?B/?L|MASTER\s*B/?L)\s*#?\s*[:\-]?\s*([A-Z0-9][A-Z0-9/-]{5,30})",
+        r"\b(?:BL|B/?L)\s*#?\s*[:\-]?\s*([A-Z0-9][A-Z0-9/-]{5,30})",
+        r"\b(?:HBL|H/?B/?L|HOUSE\s*B/?L)\s*#?\s*[:\-]?\s*([A-Z0-9][A-Z0-9/-]{5,30})",
+    ]
+
+    hints: list[str] = []
+    seen: set[str] = set()
+    upper_text = text.upper()
+    for pattern in patterns:
+        for match in re.finditer(pattern, upper_text):
+            ref = _clean_reference_hint(match.group(1))
+            if not ref:
+                continue
+            key = ref.upper()
+            if key in seen:
+                continue
+            seen.add(key)
+            hints.append(ref)
+    return hints
+
+
+def _clean_reference_hint(value: str) -> str | None:
+    cleaned = re.sub(r"[^A-Z0-9/-]+$", "", value.strip().upper())
+    cleaned = cleaned.strip("-/")
+    if len(cleaned) < 6:
+        return None
+    if not any(char.isdigit() for char in cleaned):
+        return None
+    if cleaned in {"BOOKING", "NUMBER", "UNKNOWN"}:
+        return None
+    return cleaned
 
 
 def _env_int(key: str, *, default: int, minimum: int) -> int:

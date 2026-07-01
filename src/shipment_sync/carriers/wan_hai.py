@@ -17,6 +17,10 @@ from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 from shipment_sync.playwright_runner import run_sync_playwright
 
 
+class WanHaiAntiBotBlocked(ValueError):
+    pass
+
+
 class WanHaiAdapter(CarrierAdapter):
     def __init__(self) -> None:
         self.eta_only_mode = _env_bool("SHIPMENT_ETA_ONLY", default=True)
@@ -75,6 +79,8 @@ class WanHaiAdapter(CarrierAdapter):
             for attempt in range(self.max_retries + 1):
                 try:
                     return self._playwright_request(reference=reference, cargo_type=cargo_type)
+                except WanHaiAntiBotBlocked:
+                    raise
                 except Exception as exc:
                     last_error = exc
                     if attempt >= self.max_retries:
@@ -111,11 +117,20 @@ class WanHaiAdapter(CarrierAdapter):
                         context_kwargs["locale"] = self.playwright_locale
                     context = browser.new_context(**context_kwargs)
                     page = context.new_page()
-                    page.goto(self.tracking_page_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    response = page.goto(self.tracking_page_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    html = page.content()
+                    if _looks_like_anti_bot_page(html, status_code=response.status if response else None):
+                        raise WanHaiAntiBotBlocked(
+                            "Wan Hai tracking page blocked by anti-bot protection before the query form loaded"
+                        )
                     if self.playwright_request_delay_seconds > 0:
                         page.wait_for_timeout(int(self.playwright_request_delay_seconds * 1000))
 
                     html = page.content()
+                    if _looks_like_anti_bot_page(html):
+                        raise WanHaiAntiBotBlocked(
+                            "Wan Hai tracking page blocked by anti-bot protection before the query form loaded"
+                        )
                     if 'form id="cargoTrackV2Bean"' not in html:
                         raise ValueError("Wan Hai query form not available; browser likely blocked by anti-bot protection")
 
@@ -172,6 +187,10 @@ def _build_reference_attempts(shipment: ShipmentRef) -> list[tuple[str, str]]:
     attempts: list[tuple[str, str]] = []
     if shipment.booking_no:
         ref = _normalize_reference(shipment.booking_no)
+        if ref:
+            attempts.append((ref, "2"))
+    for hint in shipment.reference_hints:
+        ref = _normalize_reference(hint)
         if ref:
             attempts.append((ref, "2"))
     if shipment.container_no:
@@ -463,6 +482,23 @@ def _append_raw_source(raw_source: str | None, extra: str) -> str:
     if raw_source and raw_source.strip():
         return f"{raw_source} | {extra}"
     return extra
+
+
+def _looks_like_anti_bot_page(html: str | None, *, status_code: int | None = None) -> bool:
+    if status_code in {401, 403, 429}:
+        return True
+    if not html:
+        return False
+    normalized = html.lower()
+    markers = (
+        "_incapsula_resource",
+        "incapsula",
+        "imperva",
+        "access denied",
+        "request unsuccessful",
+        "captcha",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def _env_bool(name: str, *, default: bool) -> bool:

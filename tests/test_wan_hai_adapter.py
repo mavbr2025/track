@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from shipment_sync.carriers.wan_hai import _build_reference_attempts, _extract_booking_detail_containers, _status_from_parsed
+from shipment_sync.carriers.wan_hai import (
+    _build_reference_attempts,
+    _extract_booking_detail_containers,
+    _looks_like_anti_bot_page,
+    _status_from_parsed,
+)
+from shipment_sync.clickup_client import _extract_wan_hai_reference_hints
 from shipment_sync.models import ShipmentRef
 
 
@@ -17,6 +23,42 @@ def test_wan_hai_prefers_booking_before_existing_containers() -> None:
     )
 
     assert attempts[:2] == [("031G539204", "2"), ("WHSU4002923", "1")]
+
+
+def test_wan_hai_uses_reference_hints_after_structured_booking() -> None:
+    attempts = _build_reference_attempts(
+        ShipmentRef(
+            task_id="task-1",
+            task_name="Wan Hai shipment",
+            shipping_line="wan hai",
+            booking_no="027G709927",
+            container_no=None,
+            list_id="list-1",
+            reference_hints=["WI666V70037", "027G709927"],
+        )
+    )
+
+    assert attempts == [("027G709927", "2"), ("WI666V70037", "2")]
+
+
+def test_wan_hai_extracts_booking_and_mbl_hints_from_clickup_comment() -> None:
+    text = (
+        "change the booking to booking confirmed. "
+        "HBL#GOSZX26062614  MBL#027G709927  BK#WI666V70037  PO F243264003Z-2.pdf"
+    )
+
+    assert _extract_wan_hai_reference_hints(text) == [
+        "WI666V70037",
+        "027G709927",
+        "GOSZX26062614",
+    ]
+
+
+def test_wan_hai_detects_incapsula_anti_bot_page() -> None:
+    html = '<script src="/_Incapsula_Resource?SWJIYLWA=abc"></script>'
+
+    assert _looks_like_anti_bot_page(html)
+    assert _looks_like_anti_bot_page("<html></html>", status_code=403)
 
 
 def test_wan_hai_extracts_containers_from_booking_detail_table_only() -> None:
