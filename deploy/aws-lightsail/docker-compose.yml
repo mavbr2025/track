@@ -157,6 +157,9 @@ services:
     restart: unless-stopped
 
   track-trace-cron-wan-hai:
+    # Wan Hai now runs as a dedicated ECS scheduled task. Keep this Lightsail
+    # service opt-in only so a broad compose up does not create a duplicate worker.
+    profiles: ["lightsail-wan-hai"]
     <<: *track-trace-service
     image: track-trace:latest
     container_name: track-trace-cron-wan-hai
