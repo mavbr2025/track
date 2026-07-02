@@ -1067,7 +1067,7 @@ def test_plan_shipment_update_prefers_first_load_port_departure_for_etd() -> Non
     assert updates["ETD"].value.date().isoformat() == "2026-03-11"
 
 
-def test_plan_shipment_update_falls_back_to_latest_departure_when_load_port_is_missing() -> None:
+def test_plan_shipment_update_falls_back_to_first_departure_when_origin_ready_event_is_missing() -> None:
     client = ClickUpClient(_settings())
     shipment = ShipmentRef(
         task_id="task-5",
@@ -1098,7 +1098,60 @@ def test_plan_shipment_update_falls_back_to_latest_departure_when_load_port_is_m
     plan = client.plan_shipment_update(shipment, status)
 
     updates = {update.label: update for update in plan.custom_field_updates}
-    assert updates["ETD"].value.date().isoformat() == "2026-03-30"
+    assert updates["ETD"].value.date().isoformat() == "2026-03-28"
+
+
+def test_plan_shipment_update_uses_first_departure_after_gate_in_for_etd() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-5b",
+        task_name="Shipment 5B",
+        shipping_line="maersk",
+        booking_no="BOOK-5B",
+        container_no="CONT-5B",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated Out (GTOT)",
+                location="CLSAI",
+                event_time=datetime(2026, 6, 17, 17, 30, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="STI",
+                event_time=datetime(2026, 6, 27, 13, 32, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="STI",
+                event_time=datetime(2026, 7, 3, 23, 0, tzinfo=timezone.utc),
+                event_time_local_text="2026-07-03T23:00:00-04:00",
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="PPCBL",
+                event_time=datetime(2026, 7, 15, 1, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="PPCBL",
+                event_time=datetime(2026, 7, 24, 23, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["ETD"].value.date().isoformat() == "2026-07-03"
 
 
 def test_plan_shipment_update_uses_first_origin_departure_cluster_for_etd() -> None:

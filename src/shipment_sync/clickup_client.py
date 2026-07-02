@@ -1461,65 +1461,39 @@ def _pick_etd_move(moves: list[MovementEvent]) -> MovementEvent | None:
     if not departures:
         return None
 
-    origin_location = next(
-        (_location_key(move.location) for move in moves if move.event_time is not None and _location_key(move.location)),
-        None,
-    )
-    if origin_location is None:
-        origin_location = next((_location_key(move.location) for move in moves if _location_key(move.location)), None)
-
-    if origin_location:
-        origin_departures = [
-            move for move in departures if _location_key(move.location) == origin_location
-        ]
-        if origin_departures:
-            return origin_departures[-1]
-
-    first_actual_load_index = next(
+    first_origin_ready_index = next(
         (
             idx
             for idx, move in enumerate(moves)
-            if _event_code_from_move(move) == "LOAD" and _move_is_actual(move)
+            if _event_code_from_move(move) in {"GTIN", "LOAD"}
         ),
         None,
     )
-    if first_actual_load_index is not None:
-        load_move = moves[first_actual_load_index]
-        later_moves = moves[first_actual_load_index + 1 :]
-        same_port_actual = [
+    if first_origin_ready_index is not None:
+        origin_ready_move = moves[first_origin_ready_index]
+        later_moves = moves[first_origin_ready_index + 1 :]
+        same_port_departures = [
             move
             for move in later_moves
             if _event_code_from_move(move) == "DEPA"
-            and _move_is_actual(move)
-            and _locations_match(move.location, load_move.location)
+            and _locations_match(move.location, origin_ready_move.location)
         ]
-        if same_port_actual:
-            return same_port_actual[0]
+        if same_port_departures:
+            return same_port_departures[0]
 
-        same_port_any = [
+        later_departures = [
             move
             for move in later_moves
-            if _event_code_from_move(move) == "DEPA"
-            and _locations_match(move.location, load_move.location)
+            if _event_code_from_move(move) == "DEPA" and move.event_time is not None
         ]
-        if same_port_any:
-            return same_port_any[0]
-
-        later_actual = [
-            move
-            for move in later_moves
-            if _event_code_from_move(move) == "DEPA" and _move_is_actual(move)
-        ]
-        if later_actual:
-            return later_actual[0]
+        if later_departures:
+            return later_departures[0]
 
         later_departures = [move for move in later_moves if _event_code_from_move(move) == "DEPA"]
         if later_departures:
             return later_departures[0]
 
-    actual_departures = [move for move in departures if _move_is_actual(move)]
-    candidates = actual_departures or departures
-    return candidates[-1]
+    return departures[0]
 
 
 def _locations_match(left: str | None, right: str | None) -> bool:
