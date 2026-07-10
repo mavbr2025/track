@@ -1216,6 +1216,48 @@ def test_plan_shipment_update_uses_first_origin_departure_cluster_for_etd() -> N
     assert updates["ETD"].value.date().isoformat() == "2026-03-27"
 
 
+def test_plan_shipment_update_uses_origin_barge_load_for_etd() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-barge-etd",
+        task_name="MSC origin barge",
+        shipping_line="msc",
+        booking_no="177WJUJUJ308516W",
+        container_no="GAOU7846820",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="YANGZHOU, CN",
+                event_time=datetime(2026, 6, 21, 8, 0, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="YANGZHOU, CN",
+                event_time=datetime(2026, 6, 22, 8, 0, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="SHANGHAI, CN",
+                event_time=datetime(2026, 6, 28, 8, 0, tzinfo=timezone.utc),
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, CN",
+                event_time=datetime(2026, 7, 14, 8, 0, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["ETD"].value.date().isoformat() == "2026-06-22"
+
+
 def test_plan_shipment_update_skips_transshipment_discharge_until_final_destination() -> None:
     client = ClickUpClient(_settings())
     shipment = ShipmentRef(

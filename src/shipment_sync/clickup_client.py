@@ -1481,6 +1481,13 @@ def _pick_etd_move(moves: list[MovementEvent]) -> MovementEvent | None:
         if same_port_departures:
             return same_port_departures[0]
 
+        # MSC and other carrier feeds can represent an origin barge as LOAD at
+        # the feeder port, DISC at the main port, then DEPA on the ocean vessel.
+        # That LOAD is the operational ETD, even though it is not a DEPA event.
+        barge_load = _pick_origin_barge_load(moves, first_origin_ready_index)
+        if barge_load is not None:
+            return barge_load
+
         later_departures = [
             move
             for move in later_moves
@@ -1494,6 +1501,40 @@ def _pick_etd_move(moves: list[MovementEvent]) -> MovementEvent | None:
             return later_departures[0]
 
     return departures[0]
+
+
+def _pick_origin_barge_load(moves: list[MovementEvent], origin_ready_index: int) -> MovementEvent | None:
+    candidate_indices = list(range(origin_ready_index, len(moves)))
+    for load_index in candidate_indices:
+        load_move = moves[load_index]
+        if _event_code_from_move(load_move) != "LOAD" or load_move.event_time is None:
+            continue
+
+        later_departure_index = next(
+            (
+                idx
+                for idx in range(load_index + 1, len(moves))
+                if _event_code_from_move(moves[idx]) == "DEPA" and moves[idx].event_time is not None
+            ),
+            None,
+        )
+        if later_departure_index is None:
+            continue
+
+        intermediate_discharge = next(
+            (
+                moves[idx]
+                for idx in range(load_index + 1, later_departure_index)
+                if _event_code_from_move(moves[idx]) == "DISC"
+                and moves[idx].event_time is not None
+                and not _locations_match(moves[idx].location, load_move.location)
+            ),
+            None,
+        )
+        if intermediate_discharge is not None:
+            return load_move
+
+    return None
 
 
 def _locations_match(left: str | None, right: str | None) -> bool:
