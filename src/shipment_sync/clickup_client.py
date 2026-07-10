@@ -1147,6 +1147,19 @@ def _derive_operational_status_step(
     ):
         target_step = "booking_confirmed"
 
+    # A confirmed feeder-barge leg is operational transit. Carrier feeds do not
+    # reliably expose the origin gate events for these moves, so do not block
+    # this transition on manually maintained gate fields.
+    if eta_date is not None and eta_date > today and _has_origin_barge_transit_move(
+        shipment=shipment,
+        status=status,
+        settings=settings,
+        field_values=field_values,
+        now_utc=now_utc,
+        current_step=current_step,
+    ):
+        target_step = _max_workflow_step(target_step, "in_transit")
+
     if gate_out_empty_date is not None and gate_in_full_date is None:
         target_step = _max_workflow_step(target_step, "collected")
 
@@ -1251,16 +1264,33 @@ def _has_origin_barge_transit_move(
     if eta_date is not None and eta_date <= now_utc.date():
         return False
 
+    ordered_moves = _order_moves_ascending(status.recent_moves)
+    if not ordered_moves:
+        return False
+
+    origin_ready_index = next(
+        (
+            idx
+            for idx, move in enumerate(ordered_moves)
+            if _event_code_from_move(move) in {"GTIN", "LOAD"}
+        ),
+        None,
+    )
+    if origin_ready_index is None:
+        return False
+
+    barge_load = _pick_origin_barge_load(ordered_moves, origin_ready_index)
+    if barge_load is not None and _move_is_effectively_actual(barge_load, now_utc=now_utc):
+        return True
+
+    # Preserve the existing, gate-backed inference for carrier feeds that do
+    # not expose the feeder discharge event needed for the exact pattern above.
     gate_out_empty_date = _field_date(settings.cf_gate_out_empty, field_values)
     gate_in_full_date = _field_date(settings.cf_gate_in_full, field_values)
     if gate_out_empty_date is None or gate_in_full_date is None:
         return False
 
     etd_date = _field_date(settings.cf_etd, field_values)
-    ordered_moves = _order_moves_ascending(status.recent_moves)
-    if not ordered_moves:
-        return False
-
     for idx, move in enumerate(ordered_moves):
         code = _event_code_from_move(move)
         if code not in {"LOAD", "DEPA", "ARRI", "DISC"}:

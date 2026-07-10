@@ -530,6 +530,65 @@ def test_plan_shipment_update_moves_origin_port_to_transit_for_origin_barge_leg(
     assert updates["Vessel/Voyage"].value == "BARGE"
 
 
+def test_plan_shipment_update_moves_to_transit_for_actual_barge_load_without_gate_events() -> None:
+    client = ClickUpClient(
+        _settings(
+            clickup_use_task_status=True,
+            cf_vessel_voyage="vessel-voyage-field",
+        )
+    )
+    shipment = ShipmentRef(
+        task_id="task-status-barge-no-gates",
+        task_name="Shipment status barge without gates",
+        shipping_line="msc",
+        booking_no="BOOK-BARGE-NO-GATES",
+        container_no="CONT-BARGE-NO-GATES",
+        list_id="list-1",
+        current_task_status="En puerto Origen",
+        current_field_values={
+            "etd-field": _ms_days_from_now(-10),
+            "eta-field": _ms_days_from_now(42),
+            "vessel-voyage-field": "MAIN VESSEL / V001",
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA future",
+        eta_time=_days_from_now(42),
+        recent_moves=[
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="PUERTO CORTES, HN",
+                event_time=_days_from_now(42),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, CN",
+                event_time=_days_from_now(6),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="SHANGHAI, CN",
+                event_time=_days_from_now(-2),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="HEFEI, CN",
+                event_time=_days_from_now(-8),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert plan.task_status_update == "Tránsito"
+    assert updates["Vessel/Voyage"].value == "BARGE"
+
+
 def test_plan_shipment_update_keeps_final_vessel_over_barge_marker() -> None:
     client = ClickUpClient(
         _settings(
