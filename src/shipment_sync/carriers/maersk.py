@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
@@ -49,6 +50,21 @@ class MaerskAdapter(CarrierAdapter):
         self.public_browser_wait_seconds = float(os.getenv("MAERSK_PUBLIC_BROWSER_WAIT_SECONDS", "5"))
         self.public_browser = os.getenv("MAERSK_PUBLIC_BROWSER", "chromium").strip() or "chromium"
         self.public_browser_channel = os.getenv("MAERSK_PUBLIC_BROWSER_CHANNEL", "chrome").strip()
+        self.public_browser_user_agent = (
+            os.getenv(
+                "MAERSK_PUBLIC_BROWSER_USER_AGENT",
+                (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+            ).strip()
+            or (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+        )
         self.timeout_seconds = int(os.getenv("MAERSK_TIMEOUT_SECONDS", "60"))
         self.max_retries = int(os.getenv("MAERSK_MAX_RETRIES", "2"))
         self.retry_delay_seconds = float(os.getenv("MAERSK_RETRY_DELAY_SECONDS", "2"))
@@ -232,13 +248,27 @@ class MaerskAdapter(CarrierAdapter):
                 if browser_type is None:
                     return None
 
-                launch_kwargs: dict[str, Any] = {"headless": True}
+                launch_kwargs: dict[str, Any] = {
+                    "headless": True,
+                    "args": ["--disable-blink-features=AutomationControlled"],
+                }
                 if self.public_browser_channel and self.public_browser == "chromium":
                     launch_kwargs["channel"] = self.public_browser_channel
 
                 browser = browser_type.launch(**launch_kwargs)
                 try:
-                    context = browser.new_context(locale="en-US", viewport={"width": 1440, "height": 1000})
+                    context = browser.new_context(
+                        user_agent=self.public_browser_user_agent,
+                        locale="en-US",
+                        viewport={"width": 1440, "height": 1000},
+                    )
+                    context.set_extra_http_headers(
+                        {
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.9",
+                        }
+                    )
+                    context.add_init_script(_MAERSK_STEALTH_INIT_SCRIPT)
                     page = context.new_page()
                     page.goto(source_url, wait_until="domcontentloaded", timeout=timeout_ms)
                     page.wait_for_function(
@@ -256,7 +286,11 @@ class MaerskAdapter(CarrierAdapter):
 
         try:
             return run_sync_playwright(_run)
-        except Exception:
+        except Exception as exc:
+            print(
+                f"Maersk public browser fallback failed for {reference}: {exc}",
+                file=sys.stderr,
+            )
             return None
 
     def _try_web_fallback(self, reference: str, ref_type: str, *, reason: str) -> tuple[dict | None, str]:
@@ -620,6 +654,14 @@ def _public_tracking_location_before(lines: list[str], index: int) -> str | None
 
 def _event_is_actual_or_today(move: MovementEvent) -> bool:
     return move.event_time is not None and move.event_time.date() <= datetime.now(timezone.utc).date()
+
+
+_MAERSK_STEALTH_INIT_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+window.chrome = window.chrome || { runtime: {} };
+"""
 
 
 def _extract_events(payload: dict) -> list[dict]:
