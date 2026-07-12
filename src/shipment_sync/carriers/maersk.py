@@ -1,6 +1,7 @@
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.parse import quote
 
 import requests
@@ -18,6 +19,7 @@ from shipment_sync.carriers.common import (
     to_dcsa_movement_name,
 )
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
+from shipment_sync.playwright_runner import run_sync_playwright
 
 
 class MaerskAdapter(CarrierAdapter):
@@ -42,6 +44,11 @@ class MaerskAdapter(CarrierAdapter):
             self.events_limit = 100
         self.fetch_all_events = _env_bool("MAERSK_FETCH_ALL_EVENTS", default=True)
         self.web_fallback_enabled = _env_bool("MAERSK_WEB_FALLBACK_ON_API_ERROR", default=True)
+        self.public_browser_fallback_enabled = _env_bool("MAERSK_PUBLIC_BROWSER_FALLBACK", default=True)
+        self.public_browser_timeout_seconds = int(os.getenv("MAERSK_PUBLIC_BROWSER_TIMEOUT_SECONDS", "45"))
+        self.public_browser_wait_seconds = float(os.getenv("MAERSK_PUBLIC_BROWSER_WAIT_SECONDS", "5"))
+        self.public_browser = os.getenv("MAERSK_PUBLIC_BROWSER", "chromium").strip() or "chromium"
+        self.public_browser_channel = os.getenv("MAERSK_PUBLIC_BROWSER_CHANNEL", "chrome").strip()
         self.timeout_seconds = int(os.getenv("MAERSK_TIMEOUT_SECONDS", "60"))
         self.max_retries = int(os.getenv("MAERSK_MAX_RETRIES", "2"))
         self.retry_delay_seconds = float(os.getenv("MAERSK_RETRY_DELAY_SECONDS", "2"))
@@ -74,6 +81,9 @@ class MaerskAdapter(CarrierAdapter):
         if events:
             status = _status_from_events(events, source, source_url=source_url)
             status.discovered_containers = discovered_containers
+            public_vessel_voyage = payload.get("public_vessel_voyage")
+            if isinstance(public_vessel_voyage, str) and public_vessel_voyage.strip():
+                status.vessel_voyage = public_vessel_voyage.strip()
             if not status.eta_time:
                 status.eta_time = payload_eta
             if not status.eta_local_text:
@@ -120,6 +130,7 @@ class MaerskAdapter(CarrierAdapter):
         )
 
     def _fetch_payload(self, reference: str, ref_type: str) -> tuple[dict, str]:
+        source_url = _build_maersk_tracking_url(reference)
         headers = {self.api_key_header: self.api_key} if self.api_key else {}
 
         if self.url_template:
@@ -167,6 +178,12 @@ class MaerskAdapter(CarrierAdapter):
                 return {"events": []}, f"maersk-events-api:{self.api_url}"
             except requests.HTTPError as exc:
                 if _http_status(exc) == 404:
+                    public_status = self._try_public_browser_fallback(reference)
+                    if public_status is not None:
+                        return {
+                            "events": _public_status_events(public_status),
+                            "public_vessel_voyage": public_status.vessel_voyage,
+                        }, public_status.raw_source or source_url
                     return {"events": []}, f"maersk-events-api:not-found:{self.api_url}"
                 if not _should_try_web_fallback(exc):
                     raise
@@ -195,6 +212,52 @@ class MaerskAdapter(CarrierAdapter):
         )
         payload = extract_json_from_http_response(response)
         return payload, f"maersk-api:{self.api_url}"
+
+    def _try_public_browser_fallback(self, reference: str) -> ShipmentStatus | None:
+        if not self.public_browser_fallback_enabled:
+            return None
+
+        source_url = _build_maersk_tracking_url(reference)
+
+        def _run() -> ShipmentStatus | None:
+            try:
+                from playwright.sync_api import sync_playwright
+            except Exception:
+                return None
+
+            timeout_ms = max(1, self.public_browser_timeout_seconds) * 1000
+            wait_ms = max(0, int(self.public_browser_wait_seconds * 1000))
+            with sync_playwright() as p:
+                browser_type = getattr(p, self.public_browser, None)
+                if browser_type is None:
+                    return None
+
+                launch_kwargs: dict[str, Any] = {"headless": True}
+                if self.public_browser_channel and self.public_browser == "chromium":
+                    launch_kwargs["channel"] = self.public_browser_channel
+
+                browser = browser_type.launch(**launch_kwargs)
+                try:
+                    context = browser.new_context(locale="en-US", viewport={"width": 1440, "height": 1000})
+                    page = context.new_page()
+                    page.goto(source_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    page.wait_for_function(
+                        "document.querySelector('main')?.innerText.includes('Latest event')",
+                        timeout=timeout_ms,
+                    )
+                    if wait_ms:
+                        page.wait_for_timeout(wait_ms)
+                    return _status_from_public_tracking_text(
+                        page.locator("main").inner_text(timeout=timeout_ms),
+                        source_url=source_url,
+                    )
+                finally:
+                    browser.close()
+
+        try:
+            return run_sync_playwright(_run)
+        except Exception:
+            return None
 
     def _try_web_fallback(self, reference: str, ref_type: str, *, reason: str) -> tuple[dict | None, str]:
         if not self.web_fallback_enabled:
@@ -383,6 +446,180 @@ def _events_params(reference: str, ref_type: str, limit: int, *, cursor: str) ->
     else:
         params["carrierBookingReference"] = reference
     return params
+
+
+def _public_status_events(status: ShipmentStatus) -> list[dict[str, str]]:
+    events: list[dict[str, str]] = []
+    for move in status.recent_moves:
+        if move.event_time is None:
+            continue
+        event: dict[str, str] = {
+            "eventDateTime": move.event_time.isoformat(),
+            "locationName": move.location or "",
+            "estimatedArrivalDateTime": status.eta_time.isoformat() if status.eta_time else "",
+        }
+        if "(DEPA)" in move.name:
+            event["eventType"] = "TRANSPORT"
+            event["transportEventTypeCode"] = "DEPA"
+        elif "(ARRI)" in move.name:
+            event["eventType"] = "TRANSPORT"
+            event["transportEventTypeCode"] = "ARRI"
+        else:
+            match = re.search(r"\(([A-Z]{4})\)$", move.name)
+            if not match:
+                continue
+            event["eventType"] = "EQUIPMENT"
+            event["equipmentEventTypeCode"] = match.group(1)
+        events.append(event)
+
+    if events and status.vessel_voyage:
+        vessel, _, voyage = status.vessel_voyage.rpartition(" ")
+        events[-1]["vesselName"] = vessel or status.vessel_voyage
+        if voyage:
+            events[-1]["carrierExportVoyageNumber"] = voyage
+    return events
+
+
+def _status_from_public_tracking_text(text: str, *, source_url: str) -> ShipmentStatus | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    eta_time, eta_local_text = _public_tracking_eta(lines)
+    recent_moves = _public_tracking_moves(lines)
+    latest_move = _public_tracking_latest_move(lines)
+    if latest_move is None and recent_moves:
+        actual_moves = [move for move in recent_moves if _event_is_actual_or_today(move)]
+        latest_move = actual_moves[-1] if actual_moves else recent_moves[-1]
+    if eta_time is None and latest_move is None and not recent_moves:
+        return None
+
+    return ShipmentStatus(
+        status_text=_eta_status_text(eta_time),
+        location=latest_move.location if latest_move else None,
+        event_time=latest_move.event_time if latest_move else None,
+        eta_time=eta_time,
+        eta_local_text=eta_local_text,
+        latest_move=latest_move,
+        recent_moves=recent_moves,
+        discovered_containers=extract_container_numbers(text),
+        raw_source=f"maersk-public-browser:{source_url}",
+        source_url=source_url,
+        movement_details=latest_move.name if latest_move else None,
+        vessel_voyage=_public_tracking_final_vessel_voyage(lines),
+    )
+
+
+def _public_tracking_eta(lines: list[str]) -> tuple[datetime | None, str | None]:
+    for index, line in enumerate(lines):
+        if line.lower() == "estimated arrival date" and index + 1 < len(lines):
+            return _parse_public_tracking_datetime(lines[index + 1])
+    return None, None
+
+
+def _public_tracking_latest_move(lines: list[str]) -> MovementEvent | None:
+    for index, line in enumerate(lines):
+        if line.lower() != "latest event" or index + 1 >= len(lines):
+            continue
+        parts = [part.strip() for part in lines[index + 1].split("•")]
+        if len(parts) < 3:
+            return None
+        event_time, local_text = _parse_public_tracking_datetime(parts[-1])
+        return MovementEvent(
+            name=_public_tracking_event_name(parts[0]),
+            location=parts[1] or None,
+            event_time=event_time,
+            event_time_local_text=local_text,
+            event_state="actual",
+        )
+    return None
+
+
+def _public_tracking_moves(lines: list[str]) -> list[MovementEvent]:
+    moves: list[MovementEvent] = []
+    for index, line in enumerate(lines):
+        normalized = line.lower()
+        if normalized == "gate out empty":
+            event_name = "Empty Container Release to Shipper (GTOT)"
+        elif normalized == "gate in":
+            event_name = "Container Gated In (GTIN)"
+        elif normalized.startswith("load on "):
+            event_name = "Container Loaded (LOAD)"
+        elif normalized.startswith("vessel departure") and "•" not in line:
+            event_name = "Transport Departed (DEPA)"
+        elif normalized.startswith("vessel arrival") and "•" not in line:
+            event_name = "Transport Arrived (ARRI)"
+        else:
+            continue
+        event_time, local_text = _next_public_tracking_datetime(lines, index)
+        if event_time is None:
+            continue
+        moves.append(
+            MovementEvent(
+                name=event_name,
+                location=_public_tracking_location_before(lines, index),
+                event_time=event_time,
+                event_time_local_text=local_text,
+                event_state="actual" if event_time.date() <= datetime.now(timezone.utc).date() else "estimated",
+            )
+        )
+    return moves
+
+
+def _public_tracking_final_vessel_voyage(lines: list[str]) -> str | None:
+    vessels: list[str] = []
+    for line in lines:
+        match = re.search(r"(?:load on|vessel departure|vessel arrival)\s*\(([^)]+)\)", line, re.IGNORECASE)
+        if match:
+            vessels.append(match.group(1))
+        elif line.lower().startswith("load on "):
+            vessels.append(line[8:])
+    if not vessels:
+        return None
+    return re.sub(r"\s*/\s*", " ", vessels[-1]).strip() or None
+
+
+def _public_tracking_event_name(value: str) -> str:
+    normalized = value.lower()
+    if "departure" in normalized:
+        return "Transport Departed (DEPA)"
+    if "arrival" in normalized:
+        return "Transport Arrived (ARRI)"
+    if "load" in normalized:
+        return "Container Loaded (LOAD)"
+    return value or "Unknown"
+
+
+def _next_public_tracking_datetime(lines: list[str], index: int) -> tuple[datetime | None, str | None]:
+    for candidate in lines[index + 1 : index + 4]:
+        parsed, local_text = _parse_public_tracking_datetime(candidate)
+        if parsed is not None:
+            return parsed, local_text
+    return None, None
+
+
+def _parse_public_tracking_datetime(value: str) -> tuple[datetime | None, str | None]:
+    parsed: datetime | None = None
+    for date_format in ("%d %b %Y %H:%M", "%d %b %Y"):
+        try:
+            parsed = datetime.strptime(value.strip(), date_format).replace(tzinfo=timezone.utc)
+            break
+        except ValueError:
+            continue
+    if parsed is None:
+        return None, None
+    return parsed, parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def _public_tracking_location_before(lines: list[str], index: int) -> str | None:
+    for candidate in reversed(lines[max(0, index - 8) : index]):
+        if candidate.upper() == candidate and any(char.isalpha() for char in candidate):
+            return candidate
+    return None
+
+
+def _event_is_actual_or_today(move: MovementEvent) -> bool:
+    return move.event_time is not None and move.event_time.date() <= datetime.now(timezone.utc).date()
 
 
 def _extract_events(payload: dict) -> list[dict]:

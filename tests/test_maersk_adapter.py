@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import requests
 
 from shipment_sync.carriers import maersk
-from shipment_sync.carriers.maersk import MaerskAdapter, _status_from_events
-from shipment_sync.models import ShipmentRef
+from shipment_sync.carriers.maersk import MaerskAdapter, _status_from_events, _status_from_public_tracking_text
+from shipment_sync.models import MovementEvent, ShipmentRef
 
 
 def _shipment() -> ShipmentRef:
@@ -25,7 +27,7 @@ def _http_error(status_code: int) -> requests.HTTPError:
     return requests.HTTPError(f"{status_code} error", response=response)
 
 
-def test_maersk_events_404_returns_empty_status_without_web_fallback(monkeypatch) -> None:
+def test_maersk_events_404_uses_public_browser_fallback(monkeypatch) -> None:
     monkeypatch.setenv("MAERSK_API_MODE", "events")
     monkeypatch.setenv("MAERSK_TRACKING_API_URL", "https://api.maersk.com/track-and-trace-private/events")
     monkeypatch.setenv("MAERSK_BEARER_TOKEN", "token")
@@ -36,18 +38,83 @@ def test_maersk_events_404_returns_empty_status_without_web_fallback(monkeypatch
         assert kwargs["non_retry_statuses"] == {401, 403, 404}
         raise _http_error(404)
 
-    def fail_web_fallback(*args, **kwargs):
-        raise AssertionError("404 should not use Maersk web fallback")
-
     monkeypatch.setattr(maersk, "get_with_retries", fake_get_with_retries)
     adapter = MaerskAdapter()
-    monkeypatch.setattr(adapter, "_try_web_fallback", fail_web_fallback)
+    monkeypatch.setattr(
+        adapter,
+        "_try_public_browser_fallback",
+        lambda reference: maersk.ShipmentStatus(
+            status_text="ETA 2026-08-16",
+            eta_time=datetime(2026, 8, 16, 23, tzinfo=timezone.utc),
+            eta_local_text="2026-08-16 23:00",
+            recent_moves=[
+                MovementEvent(
+                    name="Transport Departed (DEPA)",
+                    location="SAN ANTONIO",
+                    event_time=datetime(2026, 7, 8, 23, 29, tzinfo=timezone.utc),
+                    event_state="actual",
+                )
+            ],
+            vessel_voyage="MAERSK EVORA 632W",
+            raw_source=f"maersk-public-browser:https://www.maersk.com/tracking/{reference}",
+        ),
+    )
 
     status = adapter.fetch_status(_shipment())
 
-    assert status.status_text == "ETA unavailable"
-    assert status.recent_moves == []
-    assert status.raw_source == "maersk-events-api:not-found:https://api.maersk.com/track-and-trace-private/events"
+    assert status.status_text == "ETA 2026-08-16T23:00:00+00:00"
+    assert status.raw_source == "maersk-public-browser:https://www.maersk.com/tracking/CAAU8312730"
+    assert status.vessel_voyage == "MAERSK EVORA 632W"
+
+
+def test_maersk_public_tracking_parser_extracts_events_and_final_vessel() -> None:
+    status = _status_from_public_tracking_text(
+        """
+        Estimated arrival date
+        16 Aug 2026 23:00
+        Latest event
+        Vessel departure • SAN ANTONIO, CHILE • 08 Jul 2026
+        SAN ANTONIO
+        Gate out Empty
+        02 Jul 2026 17:37
+        Gate in
+        06 Jul 2026 19:15
+        Load on POLAR COLOMBIA / 627N
+        08 Jul 2026 16:38
+        Vessel departure (POLAR COLOMBIA / 627N)
+        08 Jul 2026 23:29
+        BALBOA
+        Vessel arrival (POLAR COLOMBIA / 627N)
+        22 Jul 2026 01:00
+        Vessel departure (MAERSK EVORA / 632W)
+        09 Aug 2026 21:00
+        MANZANILLO
+        Vessel arrival (MAERSK EVORA / 632W)
+        16 Aug 2026 23:00
+        TCKU6860166
+        """,
+        source_url="https://www.maersk.com/tracking/272684825",
+    )
+
+    assert status is not None
+    assert status.eta_local_text == "2026-08-16 23:00"
+    assert status.vessel_voyage == "MAERSK EVORA 632W"
+    assert status.latest_move is not None
+    assert status.latest_move.name == "Transport Departed (DEPA)"
+    assert status.latest_move.location == "SAN ANTONIO, CHILE"
+    assert status.latest_move.event_time is not None
+    assert status.latest_move.event_time.date().isoformat() == "2026-07-08"
+    assert status.recent_moves[2].location == "SAN ANTONIO"
+    assert status.recent_moves[3].location == "SAN ANTONIO"
+    assert [move.name for move in status.recent_moves] == [
+        "Empty Container Release to Shipper (GTOT)",
+        "Container Gated In (GTIN)",
+        "Container Loaded (LOAD)",
+        "Transport Departed (DEPA)",
+        "Transport Arrived (ARRI)",
+        "Transport Departed (DEPA)",
+        "Transport Arrived (ARRI)",
+    ]
 
 
 def test_maersk_events_401_still_raises_without_web_fallback(monkeypatch) -> None:
