@@ -514,11 +514,13 @@ def test_plan_shipment_update_moves_origin_port_to_transit_for_origin_barge_leg(
                 name="Container Discharged (DISC)",
                 location="SHANGHAI, CN",
                 event_time=_days_from_now(-2),
+                event_state="actual",
             ),
             MovementEvent(
                 name="Container Loaded (LOAD)",
                 location="YANGZHOU, CN",
                 event_time=_days_from_now(-8),
+                event_state="actual",
             ),
         ],
     )
@@ -589,6 +591,104 @@ def test_plan_shipment_update_moves_to_transit_for_actual_barge_load_without_gat
     assert updates["Vessel/Voyage"].value == "BARGE"
 
 
+def test_plan_shipment_update_moves_to_transit_for_actual_laden_barge_yard_event() -> None:
+    client = ClickUpClient(
+        _settings(
+            clickup_use_task_status=True,
+            cf_vessel_voyage="vessel-voyage-field",
+        )
+    )
+    shipment = ShipmentRef(
+        task_id="task-hefei-laden-barge",
+        task_name="MSC Hefei actual barge yard",
+        shipping_line="msc",
+        booking_no="177WJVJVJ400167T",
+        container_no="MEDU4972003",
+        list_id="list-1",
+        current_task_status="En puerto Origen",
+        current_field_values={
+            "eta-field": _ms_days_from_now(42),
+            "vessel-voyage-field": "PENDING",
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA future",
+        eta_time=_days_from_now(42),
+        recent_moves=[
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, CN",
+                event_time=_days_from_now(6),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Export at barge yard (LADEN)",
+                location="HEFEI, CN",
+                event_time=_days_from_now(-8),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="HEFEI, CN",
+                event_time=_days_from_now(-8),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+    updates = {update.label: update for update in plan.custom_field_updates}
+
+    assert plan.task_status_update == "Tránsito"
+    assert updates["Vessel/Voyage"].value == "BARGE"
+
+
+def test_plan_shipment_update_does_not_infer_transit_from_load_and_planned_departure() -> None:
+    client = ClickUpClient(
+        _settings(
+            clickup_use_task_status=True,
+            cf_vessel_voyage="vessel-voyage-field",
+        )
+    )
+    shipment = ShipmentRef(
+        task_id="task-hefei-unconfirmed-feeder",
+        task_name="MSC Hefei unconfirmed feeder",
+        shipping_line="msc",
+        booking_no="177WJVJVJ400167T",
+        container_no="MEDU4972003",
+        list_id="list-1",
+        current_task_status="En puerto Origen",
+        current_field_values={
+            "eta-field": _ms_days_from_now(42),
+            "vessel-voyage-field": "PENDING",
+        },
+    )
+    status = ShipmentStatus(
+        status_text="ETA future",
+        eta_time=_days_from_now(42),
+        recent_moves=[
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, CN",
+                event_time=_days_from_now(6),
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="HEFEI, CN",
+                event_time=_days_from_now(-8),
+                event_state="actual",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+    updates = {update.label: update for update in plan.custom_field_updates}
+
+    assert plan.task_status_update is None
+    assert "Vessel/Voyage" not in updates
+
+
 def test_plan_shipment_update_keeps_barge_until_a_later_actual_vessel_event() -> None:
     client = ClickUpClient(
         _settings(
@@ -625,6 +725,13 @@ def test_plan_shipment_update_keeps_barge_until_a_later_actual_vessel_event() ->
                 name="Container Loaded (LOAD)",
                 location="YANGZHOU, CN",
                 event_time=_days_from_now(-8),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Export at barge yard (LADEN)",
+                location="YANGZHOU, CN",
+                event_time=_days_from_now(-8),
+                event_state="actual",
             ),
         ],
     )

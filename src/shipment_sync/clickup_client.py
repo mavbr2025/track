@@ -1346,18 +1346,24 @@ def _has_origin_barge_transit_move(
     if origin_ready_index is None:
         return False
 
-    barge_load = _pick_origin_barge_load(ordered_moves, origin_ready_index)
-    if barge_load is not None and _move_is_effectively_actual(barge_load, now_utc=now_utc):
+    if _has_actual_barge_yard_load(ordered_moves, now_utc=now_utc):
         return True
 
-    # Preserve the existing, gate-backed inference for carrier feeds that do
-    # not expose the feeder discharge event needed for the exact pattern above.
+    barge_load = _pick_origin_barge_load(ordered_moves, origin_ready_index)
+    if (
+        barge_load is not None
+        and _move_is_effectively_actual(barge_load, now_utc=now_utc)
+        and _has_actual_intermediate_discharge(ordered_moves, barge_load)
+    ):
+        return True
+
+    # A gate-backed fallback still requires a later actual carrier movement;
+    # an estimated itinerary is not sufficient evidence of a feeder departure.
     gate_out_empty_date = _field_date(settings.cf_gate_out_empty, field_values)
     gate_in_full_date = _field_date(settings.cf_gate_in_full, field_values)
     if gate_out_empty_date is None or gate_in_full_date is None:
         return False
 
-    etd_date = _field_date(settings.cf_etd, field_values)
     for idx, move in enumerate(ordered_moves):
         code = _event_code_from_move(move)
         if code not in {"LOAD", "DEPA", "ARRI", "DISC"}:
@@ -1368,12 +1374,13 @@ def _has_origin_barge_transit_move(
         if not _move_is_effectively_actual(move, now_utc=now_utc):
             continue
 
-        if etd_date is not None and etd_date > now_utc.date() and move_date < etd_date:
-            return True
-
         later_departure = _next_departure_after(ordered_moves, idx)
         later_departure_date = _move_event_date(later_departure)
-        if later_departure_date is not None and later_departure_date > move_date:
+        if (
+            later_departure_date is not None
+            and later_departure_date > move_date
+            and _move_is_effectively_actual(later_departure, now_utc=now_utc)
+        ):
             return True
 
     return False
@@ -1650,6 +1657,42 @@ def _pick_origin_barge_load(moves: list[MovementEvent], origin_ready_index: int)
             return load_move
 
     return None
+
+
+def _has_actual_barge_yard_load(moves: list[MovementEvent], *, now_utc: datetime) -> bool:
+    actual_loads = [
+        move
+        for move in moves
+        if _event_code_from_move(move) == "LOAD" and _move_is_effectively_actual(move, now_utc=now_utc)
+    ]
+    if not actual_loads:
+        return False
+
+    for move in moves:
+        if not _is_barge_yard_move(move) or not _move_is_effectively_actual(move, now_utc=now_utc):
+            continue
+        if any(_locations_match(load.location, move.location) for load in actual_loads):
+            return True
+    return False
+
+
+def _has_actual_intermediate_discharge(moves: list[MovementEvent], load_move: MovementEvent) -> bool:
+    return any(
+        _event_code_from_move(move) == "DISC"
+        and _move_is_actual(move)
+        and not _locations_match(move.location, load_move.location)
+        and (
+            load_move.event_time is None
+            or move.event_time is None
+            or move.event_time >= load_move.event_time
+        )
+        for move in moves
+    )
+
+
+def _is_barge_yard_move(move: MovementEvent) -> bool:
+    normalized = (move.name or "").strip().lower()
+    return "barge yard" in normalized or "(laden)" in normalized
 
 
 def _locations_match(left: str | None, right: str | None) -> bool:
