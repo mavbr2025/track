@@ -1317,6 +1317,40 @@ def test_plan_shipment_update_uses_origin_barge_load_for_etd() -> None:
     assert updates["ETD"].value.date().isoformat() == "2026-06-22"
 
 
+def test_plan_shipment_update_uses_barge_load_when_msc_omits_main_port_discharge() -> None:
+    client = ClickUpClient(_settings())
+    shipment = ShipmentRef(
+        task_id="task-hefei-barge-etd",
+        task_name="MSC Hefei origin barge",
+        shipping_line="msc",
+        booking_no="177WJVJVJ400170T",
+        container_no="BMOU6181736",
+        list_id="list-1",
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        recent_moves=[
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="HEFEI, CN",
+                event_time=datetime(2026, 7, 7, 0, 0, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="SHANGHAI, CN",
+                event_time=datetime(2026, 7, 23, 0, 0, tzinfo=timezone.utc),
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["ETD"].value.date().isoformat() == "2026-07-07"
+
+
 def test_plan_shipment_update_skips_transshipment_discharge_until_final_destination() -> None:
     client = ClickUpClient(_settings())
     shipment = ShipmentRef(

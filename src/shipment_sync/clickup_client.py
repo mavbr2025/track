@@ -1564,6 +1564,14 @@ def _pick_origin_barge_load(moves: list[MovementEvent], origin_ready_index: int)
         if intermediate_discharge is not None:
             return load_move
 
+        # Some MSC feeder records omit the discharge at the main port. An
+        # actual LOAD at one origin location followed by departure from a
+        # different location still identifies the feeder barge as the first
+        # operational leg, and therefore as the ETD for pricing.
+        departure_move = moves[later_departure_index]
+        if not _locations_match(departure_move.location, load_move.location):
+            return load_move
+
     return None
 
 
