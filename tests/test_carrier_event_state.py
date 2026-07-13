@@ -1,4 +1,8 @@
-from shipment_sync.carriers.common import extract_event_state_hint, extract_final_destination_vessel_voyage
+from shipment_sync.carriers.common import (
+    extract_event_state_hint,
+    extract_event_vessel_voyage,
+    extract_final_destination_vessel_voyage,
+)
 
 
 def test_extract_event_state_hint_prefers_trigger_type() -> None:
@@ -62,3 +66,12 @@ def test_extract_final_destination_vessel_voyage_uses_final_arrival_not_origin_d
     ]
 
     assert extract_final_destination_vessel_voyage(events) == "A. OBELIX 0YKCVN1MA"
+
+
+def test_extract_event_vessel_voyage_supports_nested_and_msc_style_fields() -> None:
+    assert extract_event_vessel_voyage(
+        {"vesselVoyage": {"vesselName": "MSC MOTHER", "voyageNo": "123E"}}
+    ) == "MSC MOTHER 123E"
+    assert extract_event_vessel_voyage(
+        {"VesselName": "MSC HEFEI", "Voyage": "456W"}
+    ) == "MSC HEFEI 456W"

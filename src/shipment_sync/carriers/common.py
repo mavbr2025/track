@@ -240,6 +240,22 @@ def render_vessel_voyage(vessel: str | None, voyage: str | None) -> str | None:
 
 
 def extract_event_vessel_voyage(event: dict[str, Any]) -> str | None:
+    nested_vessel_voyage = event.get("vesselVoyage")
+    if not isinstance(nested_vessel_voyage, dict):
+        nested_vessel_voyage = event.get("vessel_voyage")
+    if isinstance(nested_vessel_voyage, dict):
+        vessel = extract_first(
+            nested_vessel_voyage,
+            ["vesselName", "vesselEngName", "vesselEnglishName", "VesselName", "Vessel"],
+        )
+        voyage = extract_first(
+            nested_vessel_voyage,
+            ["voyageNo", "voyageNumber", "scheduleVoyageNumber", "VoyageNo", "Voyage"],
+        )
+        rendered = render_vessel_voyage(vessel, voyage)
+        if rendered:
+            return rendered
+
     vessel = extract_first(
         event,
         [
@@ -250,6 +266,8 @@ def extract_event_vessel_voyage(event: dict[str, Any]) -> str | None:
             "transportName",
             "transport",
             "vessel",
+            "VesselName",
+            "Vessel",
         ],
     )
     voyage = extract_first(
@@ -266,6 +284,9 @@ def extract_event_vessel_voyage(event: dict[str, Any]) -> str | None:
             "inboundConsortiumVoyage",
             "voyageNo",
             "voyage",
+            "VoyageNumber",
+            "VoyageNo",
+            "Voyage",
         ],
     )
     return render_vessel_voyage(vessel, voyage)

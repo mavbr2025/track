@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
     extract_container_numbers,
+    extract_event_vessel_voyage,
     extract_event_state_hint,
     extract_eta_time,
     extract_first,
@@ -901,6 +902,7 @@ def _extract_moves(payload: dict[str, Any]) -> list[MovementEvent]:
                 event_time=parse_event_time(local_time_text),
                 event_time_local_text=local_time_text,
                 event_state=_normalize_event_state(state_hint),
+                vessel_voyage=extract_event_vessel_voyage(event),
             )
         )
 

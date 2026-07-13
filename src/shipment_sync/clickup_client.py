@@ -1226,9 +1226,9 @@ def _effective_vessel_voyage(
     field_values: dict[str, Any],
     now_utc: datetime,
 ) -> str | None:
-    carrier_vessel_voyage = (status.vessel_voyage or "").strip()
-    if carrier_vessel_voyage:
-        return carrier_vessel_voyage
+    actual_event_vessel_voyage = _latest_actual_event_vessel_voyage(status, now_utc=now_utc)
+    if actual_event_vessel_voyage:
+        return actual_event_vessel_voyage
 
     if _has_origin_barge_transit_move(
         shipment=shipment,
@@ -1240,7 +1240,35 @@ def _effective_vessel_voyage(
     ):
         return "BARGE"
 
-    return None
+    current_vessel_voyage = _field_string(settings.cf_vessel_voyage, field_values)
+    # Do not replace an active feeder-leg marker with a planned final vessel.
+    # It advances only when a later vessel-bearing event is actually reported.
+    if current_vessel_voyage and current_vessel_voyage.upper() == "BARGE":
+        return current_vessel_voyage
+
+    return (status.vessel_voyage or "").strip() or None
+
+
+def _latest_actual_event_vessel_voyage(status: ShipmentStatus, *, now_utc: datetime) -> str | None:
+    candidates = [
+        move
+        for move in status.recent_moves
+        if _event_code_from_move(move) in {"LOAD", "DEPA", "ARRI"}
+        and (move.vessel_voyage or "").strip()
+        and _move_is_effectively_actual(move, now_utc=now_utc)
+    ]
+    if not candidates:
+        return None
+
+    latest = max(
+        enumerate(candidates),
+        key=lambda item: (
+            item[1].event_time is not None,
+            item[1].event_time.isoformat() if item[1].event_time is not None else "",
+            item[0],
+        ),
+    )[1]
+    return (latest.vessel_voyage or "").strip() or None
 
 
 def _has_origin_barge_transit_move(
@@ -1429,6 +1457,16 @@ def _field_date(field_id: str | None, values: dict[str, Any]) -> date | None:
     if parsed is None:
         return None
     return parsed.astimezone(timezone.utc).date()
+
+
+def _field_string(field_id: str | None, values: dict[str, Any]) -> str | None:
+    if not field_id:
+        return None
+    value = values.get(field_id)
+    if value is None:
+        return None
+    rendered = str(value).strip()
+    return rendered or None
 
 
 def _build_move_field_updates(
