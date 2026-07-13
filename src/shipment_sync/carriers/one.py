@@ -179,6 +179,7 @@ class OneAdapter(CarrierAdapter):
                 latest_move=latest_move,
                 recent_moves=recent_moves,
                 discovered_containers=discovered_containers,
+                container_discovery_authoritative=search_type == "CNTR_NO",
                 raw_source=raw_source,
                 source_url=source_url,
                 vessel_voyage=vessel_voyage,
@@ -205,6 +206,7 @@ class OneAdapter(CarrierAdapter):
             latest_move=latest_move,
             recent_moves=recent_moves,
             discovered_containers=discovered_containers,
+            container_discovery_authoritative=search_type == "CNTR_NO",
             raw_source=raw_source,
             source_url=source_url,
             movement_details=movement_details,
@@ -349,6 +351,13 @@ def _pick_reference(shipment: ShipmentRef, booking_code: str, container_code: st
 
 def _pick_search_reference(shipment: ShipmentRef, booking_code: str, container_code: str) -> tuple[str, str, str | None]:
     preferred_container_no = _normalize_reference(shipment.container_no) if shipment.container_no else None
+    current_container_count = len(extract_container_numbers(shipment.container_no or ""))
+    if (
+        preferred_container_no
+        and shipment.expected_container_count is not None
+        and current_container_count >= shipment.expected_container_count
+    ):
+        return preferred_container_no, container_code, preferred_container_no
     if shipment.booking_no:
         return _normalize_reference(shipment.booking_no), booking_code, preferred_container_no
     if preferred_container_no:

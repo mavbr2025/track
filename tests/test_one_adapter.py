@@ -11,6 +11,7 @@ from shipment_sync.carriers.one import (
     _extract_final_discharge_vessel_voyage,
     _latest_move_from_search_item,
     _pick_latest_move,
+    _pick_search_reference,
 )
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 
@@ -303,6 +304,54 @@ def test_fetch_status_uses_booking_search_to_discover_sibling_containers() -> No
     assert status.discovered_containers == ["ONEU4291087", "ONEU4315002"]
     assert status.latest_move is not None
     assert status.latest_move.name == "Transport Departed (DEPA)"
+
+
+def test_fetch_status_uses_direct_container_search_when_declared_count_is_already_met() -> None:
+    session = _RouteStubSession(
+        search_payload={
+            "status": 200,
+            "code": 1,
+            "message": "Success",
+            "data": [{"bookingNo": "SHAGT3664400", "containerNo": "ONEU0005230"}],
+        },
+        voyage_payload={"status": 200, "code": 1, "message": "Success", "data": []},
+    )
+    adapter = OneAdapter()
+    adapter.session = session
+    shipment = ShipmentRef(
+        task_id="task-1",
+        task_name="Shipment 1",
+        shipping_line="one",
+        booking_no="SHAGT3664400",
+        container_no="ONEU0005230, FFAU3663993",
+        list_id="list-1",
+        expected_container_count=1,
+    )
+
+    status = adapter.fetch_status(shipment)
+
+    assert session.posts[0]["json"]["filters"] == {
+        "search_text": "ONEU0005230",
+        "search_type": "CNTR_NO",
+    }
+    assert status.discovered_containers == ["ONEU0005230"]
+    assert status.container_discovery_authoritative is True
+
+
+def test_pick_search_reference_keeps_booking_lookup_when_more_containers_are_expected() -> None:
+    shipment = ShipmentRef(
+        task_id="task-1",
+        task_name="Shipment 1",
+        shipping_line="one",
+        booking_no="NB6BF9831800",
+        container_no="ONEU4291087",
+        list_id="list-1",
+        expected_container_count=2,
+    )
+
+    reference, reference_type, preferred_container = _pick_search_reference(shipment, "B", "C")
+
+    assert (reference, reference_type, preferred_container) == ("NB6BF9831800", "B", "ONEU4291087")
 
 
 def test_plan_shipment_update_writes_vessel_voyage_field() -> None:

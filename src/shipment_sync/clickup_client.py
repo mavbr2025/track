@@ -110,6 +110,7 @@ class ClickUpClient:
             shipping_line = _field_text(fields.get(self.settings.cf_shipping_line))
             booking_no = _field_text(fields.get(self.settings.cf_booking_no))
             container_no = _field_text(fields.get(self.settings.cf_container_no))
+            expected_container_count = _expected_container_count(task.get("custom_fields", []))
             current_status_value = (
                 _field_text(fields.get(self.settings.cf_shipment_status))
                 if self.settings.cf_shipment_status
@@ -155,6 +156,7 @@ class ClickUpClient:
                     current_status_value=current_status_value,
                     current_task_status=_task_status_text(task),
                     track_trace_snapshot_hash=track_trace_snapshot_hash,
+                    expected_container_count=expected_container_count,
                     current_field_values={
                         field_id: field_payload.get("value")
                         for field_id, field_payload in fields.items()
@@ -851,6 +853,27 @@ def _field_map(custom_fields: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
     return {f["id"]: f for f in custom_fields if "id" in f}
 
 
+def _expected_container_count(custom_fields: Any) -> int | None:
+    if not isinstance(custom_fields, list):
+        return None
+
+    for field in custom_fields:
+        if not isinstance(field, dict):
+            continue
+        if _normalize_workflow_status_name(str(field.get("name") or "")) != "numberofcontainers":
+            continue
+        value = field.get("value")
+        try:
+            parsed_count = float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        if not parsed_count.is_integer():
+            return None
+        count = int(parsed_count)
+        return count if count > 0 else None
+    return None
+
+
 def _build_direct_event_field_updates(*, status: ShipmentStatus, settings: Settings) -> list[ShipmentFieldWrite]:
     updates: list[ShipmentFieldWrite] = []
 
@@ -929,11 +952,27 @@ def _build_container_field_update(
     if not discovered_tokens:
         return None
 
+    expected_count = shipment.expected_container_count
+    if (
+        expected_count is not None
+        and status.container_discovery_authoritative
+        and len(discovered_tokens) == expected_count
+        and len(current_tokens) > expected_count
+    ):
+        return ShipmentFieldWrite(
+            field_id=field_id,
+            value=", ".join(discovered_tokens),
+            field_type="text",
+            label="Container",
+        )
+
     merged_tokens = list(current_tokens)
     current_set = set(current_tokens)
     for token in discovered_tokens:
         if token in current_set:
             continue
+        if expected_count is not None and len(merged_tokens) >= expected_count:
+            break
         merged_tokens.append(token)
         current_set.add(token)
 

@@ -16,6 +16,7 @@ class ShipmentRef:
     current_status_value: str | None = None
     current_task_status: str | None = None
     track_trace_snapshot_hash: str | None = None
+    expected_container_count: int | None = None
     current_field_values: dict[str, Any] = field(default_factory=dict)
     reference_hints: list[str] = field(default_factory=list)
 
@@ -30,6 +31,7 @@ class ShipmentStatus:
     latest_move: "MovementEvent | None" = None
     recent_moves: list["MovementEvent"] = field(default_factory=list)
     discovered_containers: list[str] = field(default_factory=list)
+    container_discovery_authoritative: bool = False
     raw_source: str | None = None
     source_url: str | None = None
     movement_details: str | None = None
