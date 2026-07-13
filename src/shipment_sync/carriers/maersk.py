@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
@@ -23,22 +24,45 @@ from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
 from shipment_sync.playwright_runner import run_sync_playwright
 
 
+@dataclass(frozen=True)
+class MaerskCredentialProfile:
+    name: str
+    api_key: str
+    consumer_key: str
+    bearer_token: str
+    oauth_token_url: str
+    oauth_client_id: str
+    oauth_client_secret: str
+    oauth_scope: str
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(
+            self.bearer_token
+            or (
+                self.oauth_token_url
+                and (self.oauth_client_id or self.consumer_key)
+                and (self.oauth_client_secret or self.api_key)
+            )
+        )
+
+
 class MaerskAdapter(CarrierAdapter):
     def __init__(self) -> None:
         self.eta_only_mode = _env_bool("SHIPMENT_ETA_ONLY", default=True)
         self.api_mode = os.getenv("MAERSK_API_MODE", "auto").strip().lower()
         self.url_template = os.getenv("MAERSK_TRACKING_URL_TEMPLATE", "").strip()
         self.api_url = os.getenv("MAERSK_TRACKING_API_URL", "").strip()
-        self.api_key = os.getenv("MAERSK_API_KEY", "").strip()
         self.api_key_header = os.getenv("MAERSK_API_KEY_HEADER", "X-API-Key")
         self.ref_param = os.getenv("MAERSK_REF_PARAM", "reference")
         self.type_param = os.getenv("MAERSK_TYPE_PARAM", "referenceType")
-        self.consumer_key = os.getenv("MAERSK_CONSUMER_KEY", "").strip()
-        self.bearer_token = os.getenv("MAERSK_BEARER_TOKEN", "").strip()
-        self.oauth_token_url = os.getenv("MAERSK_OAUTH_TOKEN_URL", "").strip()
-        self.oauth_client_id = os.getenv("MAERSK_OAUTH_CLIENT_ID", "").strip()
-        self.oauth_client_secret = os.getenv("MAERSK_OAUTH_CLIENT_SECRET", "").strip()
-        self.oauth_scope = os.getenv("MAERSK_OAUTH_SCOPE", "").strip()
+        self.default_credentials = _credentials_from_env("MAERSK", name="default")
+        self.mexico_credentials = _credentials_from_env(
+            "MAERSK_MEXICO",
+            name="mexico",
+            oauth_defaults=self.default_credentials,
+        )
+        self.mexico_list_ids = _csv_set("MAERSK_MEXICO_LIST_IDS")
         self.api_version = os.getenv("MAERSK_API_VERSION", "1").strip()
         self.events_limit = int(os.getenv("MAERSK_EVENTS_LIMIT", "100"))
         if self.events_limit <= 0:
@@ -69,14 +93,14 @@ class MaerskAdapter(CarrierAdapter):
         self.max_retries = int(os.getenv("MAERSK_MAX_RETRIES", "2"))
         self.retry_delay_seconds = float(os.getenv("MAERSK_RETRY_DELAY_SECONDS", "2"))
         self.session = requests.Session()
-        self._oauth_access_token: str | None = None
-        self._oauth_expires_at: datetime | None = None
+        self._oauth_tokens: dict[str, tuple[str, datetime]] = {}
 
     def fetch_status(self, shipment: ShipmentRef) -> ShipmentStatus:
         candidates = _pick_references(shipment)
+        credentials = self._credentials_for(shipment)
         fallback_status: ShipmentStatus | None = None
         for reference, ref_type in candidates:
-            status = self._fetch_status_for_reference(reference, ref_type)
+            status = self._fetch_status_for_reference(reference, ref_type, credentials)
             if _status_has_carrier_data(status):
                 return status
             if fallback_status is None:
@@ -86,9 +110,14 @@ class MaerskAdapter(CarrierAdapter):
             return fallback_status
         raise ValueError("Missing booking/container number")
 
-    def _fetch_status_for_reference(self, reference: str, ref_type: str) -> ShipmentStatus:
+    def _fetch_status_for_reference(
+        self,
+        reference: str,
+        ref_type: str,
+        credentials: MaerskCredentialProfile,
+    ) -> ShipmentStatus:
         source_url = _build_maersk_tracking_url(reference)
-        payload, source = self._fetch_payload(reference, ref_type)
+        payload, source = self._fetch_payload(reference, ref_type, credentials)
         discovered_containers = extract_container_numbers(payload)
         events = _extract_events(payload)
         payload_eta = extract_eta_time(payload)
@@ -145,9 +174,14 @@ class MaerskAdapter(CarrierAdapter):
             movement_details=movement_details,
         )
 
-    def _fetch_payload(self, reference: str, ref_type: str) -> tuple[dict, str]:
+    def _fetch_payload(
+        self,
+        reference: str,
+        ref_type: str,
+        credentials: MaerskCredentialProfile,
+    ) -> tuple[dict, str]:
         source_url = _build_maersk_tracking_url(reference)
-        headers = {self.api_key_header: self.api_key} if self.api_key else {}
+        headers = {self.api_key_header: credentials.api_key} if credentials.api_key else {}
 
         if self.url_template:
             url = self.url_template.format(reference=reference, type=ref_type)
@@ -168,8 +202,8 @@ class MaerskAdapter(CarrierAdapter):
                 return fallback_payload, fallback_source
             raise ValueError("Set MAERSK_TRACKING_URL_TEMPLATE or MAERSK_TRACKING_API_URL")
 
-        if self._use_maersk_events_api():
-            events_headers = self._build_events_api_headers()
+        if self._use_maersk_events_api(credentials):
+            events_headers = self._build_events_api_headers(credentials)
             try:
                 if self.fetch_all_events:
                     all_events = self._fetch_all_events(reference, ref_type, events_headers)
@@ -341,32 +375,42 @@ class MaerskAdapter(CarrierAdapter):
 
         return all_events
 
-    def _use_maersk_events_api(self) -> bool:
+    def _credentials_for(self, shipment: ShipmentRef) -> MaerskCredentialProfile:
+        if shipment.list_id in self.mexico_list_ids:
+            if not self.mexico_credentials.is_configured:
+                raise ValueError(
+                    "Maersk Mexico credential profile is selected for this list but is not fully configured."
+                )
+            return self.mexico_credentials
+        return self.default_credentials
+
+    def _use_maersk_events_api(self, credentials: MaerskCredentialProfile) -> bool:
         if self.api_mode == "events":
             return True
         if self.api_mode == "legacy":
             return False
-        return bool(self.consumer_key or self.bearer_token or self.oauth_token_url)
+        return credentials.is_configured
 
-    def _build_events_api_headers(self) -> dict[str, str]:
+    def _build_events_api_headers(self, credentials: MaerskCredentialProfile) -> dict[str, str]:
         headers: dict[str, str] = {"API-Version": self.api_version}
-        if self.consumer_key:
-            headers["Consumer-Key"] = self.consumer_key
-        if self.bearer_token:
-            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        if credentials.consumer_key:
+            headers["Consumer-Key"] = credentials.consumer_key
+        if credentials.bearer_token:
+            headers["Authorization"] = f"Bearer {credentials.bearer_token}"
             return headers
-        access_token = self._get_oauth_access_token()
+        access_token = self._get_oauth_access_token(credentials)
         headers["Authorization"] = f"Bearer {access_token}"
         return headers
 
-    def _get_oauth_access_token(self) -> str:
+    def _get_oauth_access_token(self, credentials: MaerskCredentialProfile) -> str:
         now = datetime.now(timezone.utc)
-        if self._oauth_access_token and self._oauth_expires_at and now < self._oauth_expires_at:
-            return self._oauth_access_token
+        cached = self._oauth_tokens.get(credentials.name)
+        if cached and now < cached[1]:
+            return cached[0]
 
-        token_url = self.oauth_token_url
-        client_id = self.oauth_client_id or self.consumer_key
-        client_secret = self.oauth_client_secret or self.api_key
+        token_url = credentials.oauth_token_url
+        client_id = credentials.oauth_client_id or credentials.consumer_key
+        client_secret = credentials.oauth_client_secret or credentials.api_key
         if not token_url or not client_id or not client_secret:
             raise ValueError(
                 "For Maersk events API set either MAERSK_BEARER_TOKEN "
@@ -374,12 +418,12 @@ class MaerskAdapter(CarrierAdapter):
             )
 
         base_data = {"grant_type": "client_credentials"}
-        if self.oauth_scope:
-            base_data["scope"] = self.oauth_scope
+        if credentials.oauth_scope:
+            base_data["scope"] = credentials.oauth_scope
 
         base_headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        if self.consumer_key:
-            base_headers["Consumer-Key"] = self.consumer_key
+        if credentials.consumer_key:
+            base_headers["Consumer-Key"] = credentials.consumer_key
 
         attempts = [
             {
@@ -418,8 +462,10 @@ class MaerskAdapter(CarrierAdapter):
                         ttl_seconds = int(expires_in)
                     except Exception:
                         ttl_seconds = 300
-                    self._oauth_access_token = token
-                    self._oauth_expires_at = now + timedelta(seconds=max(60, ttl_seconds - 30))
+                    self._oauth_tokens[credentials.name] = (
+                        token,
+                        now + timedelta(seconds=max(60, ttl_seconds - 30)),
+                    )
                     return token
             except Exception as exc:
                 last_error = exc
@@ -453,6 +499,30 @@ def _pick_references(shipment: ShipmentRef) -> list[tuple[str, str]]:
         seen.add(key)
         deduped.append((reference, ref_type))
     return deduped
+
+
+def _credentials_from_env(
+    prefix: str,
+    *,
+    name: str,
+    oauth_defaults: MaerskCredentialProfile | None = None,
+) -> MaerskCredentialProfile:
+    oauth_token_url = os.getenv(f"{prefix}_OAUTH_TOKEN_URL", "").strip()
+    oauth_scope = os.getenv(f"{prefix}_OAUTH_SCOPE", "").strip()
+    return MaerskCredentialProfile(
+        name=name,
+        api_key=os.getenv(f"{prefix}_API_KEY", "").strip(),
+        consumer_key=os.getenv(f"{prefix}_CONSUMER_KEY", "").strip(),
+        bearer_token=os.getenv(f"{prefix}_BEARER_TOKEN", "").strip(),
+        oauth_token_url=oauth_token_url or (oauth_defaults.oauth_token_url if oauth_defaults else ""),
+        oauth_client_id=os.getenv(f"{prefix}_OAUTH_CLIENT_ID", "").strip(),
+        oauth_client_secret=os.getenv(f"{prefix}_OAUTH_CLIENT_SECRET", "").strip(),
+        oauth_scope=oauth_scope or (oauth_defaults.oauth_scope if oauth_defaults else ""),
+    )
+
+
+def _csv_set(key: str) -> set[str]:
+    return {value.strip() for value in os.getenv(key, "").split(",") if value.strip()}
 
 
 def _split_container_references(reference: str) -> list[str]:
