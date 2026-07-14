@@ -1,6 +1,7 @@
 import os
 import re
 import time
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
@@ -164,7 +165,10 @@ class OneAdapter(CarrierAdapter):
                 raw_source = f"one-edh-voyage:{self.edh_base_url}/vessel/track-and-trace/voyage-list"
         vessel_voyage = _extract_final_discharge_vessel_voyage(voyage_legs, first_item)
 
-        recent_moves = self._fetch_recent_moves(booking_no, container_no)
+        recent_moves = _enrich_moves_with_voyage_legs(
+            self._fetch_recent_moves(booking_no, container_no),
+            voyage_legs,
+        )
         if not recent_moves and voyage_legs:
             departure_move = _extract_departure_move_from_voyage_list_data(voyage_legs)
             if departure_move is not None:
@@ -480,6 +484,54 @@ def _extract_final_discharge_vessel_voyage(items: list[dict[str, Any]], search_i
     )
     parts = [part for part in (vessel, voyage) if part]
     return " ".join(parts) or None
+
+
+def _enrich_moves_with_voyage_legs(
+    moves: list[MovementEvent],
+    voyage_legs: list[dict[str, Any]],
+) -> list[MovementEvent]:
+    """Restore ONE vessel names omitted from individual cargo-event records."""
+    vessel_by_voyage = _vessel_voyage_by_leg(voyage_legs)
+    if not vessel_by_voyage:
+        return moves
+
+    enriched: list[MovementEvent] = []
+    for move in moves:
+        voyage = (move.vessel_voyage or "").strip()
+        full_vessel_voyage = vessel_by_voyage.get(voyage.upper()) if _is_voyage_only(voyage) else None
+        enriched.append(replace(move, vessel_voyage=full_vessel_voyage or move.vessel_voyage))
+    return enriched
+
+
+def _vessel_voyage_by_leg(voyage_legs: list[dict[str, Any]]) -> dict[str, str]:
+    resolved: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for leg in voyage_legs:
+        vessel = _safe_text(leg.get("vesselEngName")) or _safe_text(leg.get("vesselName"))
+        if not vessel:
+            continue
+        voyages = {
+            value
+            for value in (
+                _safe_text(leg.get("outboundConsortiumVoyage")),
+                _safe_text(leg.get("inboundConsortiumVoyage")),
+                _schedule_voyage_text(leg),
+            )
+            if value
+        }
+        for voyage in voyages:
+            key = voyage.upper()
+            candidate = f"{vessel} {voyage}"
+            existing = resolved.get(key)
+            if existing and existing != candidate:
+                ambiguous.add(key)
+                continue
+            resolved[key] = candidate
+    return {key: value for key, value in resolved.items() if key not in ambiguous}
+
+
+def _is_voyage_only(value: str) -> bool:
+    return bool(re.fullmatch(r"\d{2,5}[A-Z]{0,2}", value, flags=re.IGNORECASE))
 
 
 def _pick_final_discharge_leg(items: list[dict[str, Any]], search_item: dict[str, Any]) -> dict[str, Any] | None:

@@ -9,6 +9,7 @@ from shipment_sync.carriers.one import (
     _extract_eta_from_cargo_events,
     _extract_booking_status_text,
     _extract_final_discharge_vessel_voyage,
+    _enrich_moves_with_voyage_legs,
     _latest_move_from_search_item,
     _pick_latest_move,
     _pick_search_reference,
@@ -209,6 +210,37 @@ def test_extract_final_discharge_vessel_voyage_uses_final_pod_leg() -> None:
     )
 
     assert vessel_voyage == "SAN ALFONSO 26021E"
+
+
+def test_enrich_moves_with_voyage_legs_restores_actual_vessel_name() -> None:
+    moves = [
+        MovementEvent(
+            name="Transport Arrived (ARRI)",
+            location="MANZANILLO",
+            event_time=datetime(2026, 7, 14, 15, 28, tzinfo=timezone.utc),
+            event_state="actual",
+            vessel_voyage="2623E",
+        )
+    ]
+    voyage_legs = [
+        {
+            "vesselEngName": "IQUIQUE EXPRESS",
+            "scheduleVoyageNumber": "2623",
+            "scheduleDirectionCode": "E",
+            "inboundConsortiumVoyage": "2623E",
+            "outboundConsortiumVoyage": "2623E",
+        },
+        {
+            "vesselEngName": "ALIAGA EXPRESS",
+            "scheduleVoyageNumber": "0371",
+            "scheduleDirectionCode": "E",
+            "outboundConsortiumVoyage": "0371E",
+        },
+    ]
+
+    enriched = _enrich_moves_with_voyage_legs(moves, voyage_legs)
+
+    assert enriched[0].vessel_voyage == "IQUIQUE EXPRESS 2623E"
 
 
 def test_fetch_status_treats_empty_booking_search_with_voyage_as_processing() -> None:
