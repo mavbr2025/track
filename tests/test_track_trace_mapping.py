@@ -780,6 +780,37 @@ def test_plan_shipment_update_replaces_barge_with_latest_actual_mother_vessel() 
     assert updates["Vessel/Voyage"].value == "MSC MOTHER 123E"
 
 
+def test_plan_shipment_update_enriches_one_actual_voyage_with_matching_vessel_name() -> None:
+    client = ClickUpClient(_settings(cf_vessel_voyage="vessel-voyage-field"))
+    shipment = ShipmentRef(
+        task_id="task-one-seaspan-bravo",
+        task_name="ONE transshipment vessel",
+        shipping_line="one",
+        booking_no="NB5BI3647900",
+        container_no="ONEU5053340",
+        list_id="list-1",
+        current_field_values={"vessel-voyage-field": "0103E"},
+    )
+    status = ShipmentStatus(
+        status_text="ETA future",
+        vessel_voyage="SEASPAN BRAVO 0103E",
+        recent_moves=[
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="PUSAN",
+                event_time=_days_from_now(-2),
+                event_state="actual",
+                vessel_voyage="0103E",
+            )
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+    updates = {update.label: update for update in plan.custom_field_updates}
+
+    assert updates["Vessel/Voyage"].value == "SEASPAN BRAVO 0103E"
+
+
 def test_plan_shipment_update_does_not_move_origin_port_for_future_etd_without_barge_leg() -> None:
     client = ClickUpClient(
         _settings(

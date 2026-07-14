@@ -1267,7 +1267,10 @@ def _effective_vessel_voyage(
 ) -> str | None:
     actual_event_vessel_voyage = _latest_actual_event_vessel_voyage(status, now_utc=now_utc)
     if actual_event_vessel_voyage:
-        return actual_event_vessel_voyage
+        return _enrich_voyage_only_event_vessel(
+            actual_event_vessel_voyage,
+            status.vessel_voyage,
+        )
 
     if _has_origin_barge_transit_move(
         shipment=shipment,
@@ -1308,6 +1311,22 @@ def _latest_actual_event_vessel_voyage(status: ShipmentStatus, *, now_utc: datet
         ),
     )[1]
     return (latest.vessel_voyage or "").strip() or None
+
+
+def _enrich_voyage_only_event_vessel(event_vessel_voyage: str, carrier_vessel_voyage: str | None) -> str:
+    """Keep the actual event selection while restoring a matching vessel name."""
+    candidate = (carrier_vessel_voyage or "").strip()
+    if not candidate or not _is_voyage_only(event_vessel_voyage):
+        return event_vessel_voyage
+
+    voyage = re.escape(event_vessel_voyage.strip())
+    if re.search(rf"(?<![A-Z0-9]){voyage}(?![A-Z0-9])", candidate, flags=re.IGNORECASE):
+        return candidate
+    return event_vessel_voyage
+
+
+def _is_voyage_only(value: str) -> bool:
+    return bool(re.fullmatch(r"\d{2,5}[A-Z]{0,2}", value.strip(), flags=re.IGNORECASE))
 
 
 def _has_origin_barge_transit_move(
