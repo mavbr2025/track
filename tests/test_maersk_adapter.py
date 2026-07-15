@@ -191,6 +191,7 @@ def test_maersk_uses_mexico_credentials_for_configured_tago_mago_list(monkeypatc
     monkeypatch.setenv("MAERSK_CONSUMER_KEY", "default-consumer")
     monkeypatch.setenv("MAERSK_BEARER_TOKEN", "default-token")
     monkeypatch.setenv("MAERSK_MEXICO_LIST_IDS", "901703461634")
+    monkeypatch.setenv("MAERSK_MEXICO_CREDENTIAL_PROFILE", "mexico")
     monkeypatch.setenv("MAERSK_MEXICO_CONSUMER_KEY", "mexico-consumer")
     monkeypatch.setenv("MAERSK_MEXICO_BEARER_TOKEN", "mexico-token")
 
@@ -222,6 +223,35 @@ def test_maersk_uses_mexico_credentials_for_configured_tago_mago_list(monkeypatc
 
     assert status.latest_move is not None
     assert status.latest_move.location == "SAN ANTONIO"
+
+
+def test_maersk_uses_default_credentials_for_mexico_list_by_default(monkeypatch) -> None:
+    monkeypatch.setenv("MAERSK_API_MODE", "events")
+    monkeypatch.setenv("MAERSK_TRACKING_API_URL", "https://api.maersk.com/track-and-trace-private/events")
+    monkeypatch.setenv("MAERSK_CONSUMER_KEY", "default-consumer")
+    monkeypatch.setenv("MAERSK_BEARER_TOKEN", "default-token")
+    monkeypatch.setenv("MAERSK_MEXICO_LIST_IDS", "901703461634")
+    monkeypatch.setenv("MAERSK_MEXICO_CONSUMER_KEY", "rejected-mexico-consumer")
+    monkeypatch.setenv("MAERSK_MEXICO_BEARER_TOKEN", "rejected-mexico-token")
+
+    def fake_fetch_all_events(self, reference, ref_type, headers):
+        assert reference == "TCKU6860166"
+        assert ref_type == "container"
+        assert headers["Consumer-Key"] == "default-consumer"
+        assert headers["Authorization"] == "Bearer default-token"
+        return []
+
+    monkeypatch.setattr(MaerskAdapter, "_fetch_all_events", fake_fetch_all_events)
+    MaerskAdapter().fetch_status(
+        ShipmentRef(
+            task_id="task-1",
+            task_name="TagoMago Maersk shipment",
+            shipping_line="maersk",
+            booking_no=None,
+            container_no="TCKU6860166",
+            list_id="901703461634",
+        )
+    )
 
 
 def test_maersk_status_sets_final_arrival_vessel_voyage() -> None:

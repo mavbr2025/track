@@ -64,6 +64,9 @@ class MaerskAdapter(CarrierAdapter):
             oauth_defaults=self.default_credentials,
         )
         self.mexico_list_ids = _csv_set("MAERSK_MEXICO_LIST_IDS")
+        self.mexico_credential_profile = (
+            os.getenv("MAERSK_MEXICO_CREDENTIAL_PROFILE", "default").strip().lower() or "default"
+        )
         self.api_version = os.getenv("MAERSK_API_VERSION", "1").strip()
         self.events_limit = int(os.getenv("MAERSK_EVENTS_LIMIT", "100"))
         if self.events_limit <= 0:
@@ -378,6 +381,12 @@ class MaerskAdapter(CarrierAdapter):
 
     def _credentials_for(self, shipment: ShipmentRef) -> MaerskCredentialProfile:
         if shipment.list_id in self.mexico_list_ids:
+            if self.mexico_credential_profile == "default":
+                return self.default_credentials
+            if self.mexico_credential_profile not in {"mexico", "scoped"}:
+                raise ValueError(
+                    "MAERSK_MEXICO_CREDENTIAL_PROFILE must be 'default' or 'mexico'."
+                )
             if not self.mexico_credentials.is_configured:
                 raise ValueError(
                     "Maersk Mexico credential profile is selected for this list but is not fully configured."
