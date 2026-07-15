@@ -338,7 +338,7 @@ def test_fetch_status_uses_booking_search_to_discover_sibling_containers() -> No
     assert status.latest_move.name == "Transport Departed (DEPA)"
 
 
-def test_fetch_status_uses_direct_container_search_when_declared_count_is_already_met() -> None:
+def test_fetch_status_uses_booking_search_when_declared_count_is_already_met() -> None:
     session = _RouteStubSession(
         search_payload={
             "status": 200,
@@ -363,27 +363,27 @@ def test_fetch_status_uses_direct_container_search_when_declared_count_is_alread
     status = adapter.fetch_status(shipment)
 
     assert session.posts[0]["json"]["filters"] == {
-        "search_text": "ONEU0005230",
-        "search_type": "CNTR_NO",
+        "search_text": "SHAGT3664400",
+        "search_type": "BKG_NO",
     }
     assert status.discovered_containers == ["ONEU0005230"]
-    assert status.container_discovery_authoritative is True
+    assert status.container_discovery_authoritative is False
 
 
-def test_pick_search_reference_keeps_booking_lookup_when_more_containers_are_expected() -> None:
+def test_pick_search_reference_uses_booking_over_stale_container_when_count_is_met() -> None:
     shipment = ShipmentRef(
         task_id="task-1",
         task_name="Shipment 1",
         shipping_line="one",
-        booking_no="NB6BF9831800",
-        container_no="ONEU4291087",
+        booking_no="XMNG98354400",
+        container_no="DRYU4262275",
         list_id="list-1",
-        expected_container_count=2,
+        expected_container_count=1,
     )
 
     reference, reference_type, preferred_container = _pick_search_reference(shipment, "B", "C")
 
-    assert (reference, reference_type, preferred_container) == ("NB6BF9831800", "B", "ONEU4291087")
+    assert (reference, reference_type, preferred_container) == ("XMNG98354400", "B", "DRYU4262275")
 
 
 def test_plan_shipment_update_writes_vessel_voyage_field() -> None:
