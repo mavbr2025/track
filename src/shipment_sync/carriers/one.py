@@ -299,7 +299,7 @@ class OneAdapter(CarrierAdapter):
                     event_time=parse_event_time(local_time_text),
                     event_time_local_text=local_time_text,
                     event_state=event_state,
-                    vessel_voyage=extract_event_vessel_voyage(event),
+                    vessel_voyage=_extract_one_event_vessel_voyage(event),
                 )
             )
 
@@ -308,6 +308,23 @@ class OneAdapter(CarrierAdapter):
             key=lambda m: (m.event_time is not None, m.event_time.isoformat() if m.event_time else ""),
             reverse=True,
         )
+
+
+def _extract_one_event_vessel_voyage(event: dict[str, Any]) -> str | None:
+    """Read ONE's structured vessel data before using the generic event parser."""
+    vessel = event.get("edhVessel")
+    if isinstance(vessel, dict):
+        vessel_name = _safe_text(vessel.get("name")) or _safe_text(vessel.get("vesselName"))
+        voyage = (
+            _safe_text(vessel.get("outboundConsortiumVoyage"))
+            or _schedule_voyage_text(vessel)
+            or _safe_text(vessel.get("voyNo"))
+        )
+        parts = [part for part in (vessel_name, voyage) if part]
+        if parts:
+            return " ".join(parts)
+
+    return extract_event_vessel_voyage(event)
 
     def _fetch_payload(self, reference: str, ref_type_code: str) -> tuple[dict, str]:
         headers = {self.api_key_header: self.api_key} if self.api_key else {}

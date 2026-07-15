@@ -108,6 +108,33 @@ def test_fetch_recent_moves_uses_trigger_type_for_actual_events() -> None:
     assert moves[0].event_state == "actual"
 
 
+def test_fetch_recent_moves_prefers_one_outbound_vessel_voyage() -> None:
+    adapter = OneAdapter()
+    adapter.session = _StubSession(
+        {
+            "data": [
+                {
+                    "eventName": "Vessel Departure from Port of Loading",
+                    "eventLocalPortDate": "2026-06-20T05:07:00.000Z",
+                    "triggerType": "ACTUAL",
+                    "location": {"locationName": "NINGBO, ZHEJIANG"},
+                    "edhVessel": {
+                        "name": "ONE SPARKLE",
+                        "voyNo": "2624",
+                        "dirCode": "E",
+                        "inboundConsortiumVoyage": "2611W",
+                        "outboundConsortiumVoyage": "2624E",
+                    },
+                }
+            ]
+        }
+    )
+
+    moves = adapter._fetch_recent_moves("NB5BI4208300", "TGCU5293003")
+
+    assert moves[0].vessel_voyage == "ONE SPARKLE 2624E"
+
+
 def test_extract_eta_from_cargo_events_uses_trigger_type_for_estimated_events() -> None:
     eta_time, eta_raw = _extract_eta_from_cargo_events(
         [
