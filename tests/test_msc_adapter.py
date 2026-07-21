@@ -104,3 +104,41 @@ def test_msc_status_sets_vessel_voyage_from_final_pod_fields() -> None:
     )
 
     assert status.vessel_voyage == "MSC FINAL FV123A"
+
+
+def test_msc_normalizes_terminal_delivery_and_empty_return_events() -> None:
+    status = _status_from_payload(
+        payload={
+            "IsSuccess": True,
+            "Data": {
+                "BillOfLadings": [
+                    {
+                        "ContainersInfo": [
+                            {
+                                "Events": [
+                                    {
+                                        "Description": "Import to consignee",
+                                        "Date": "14/07/2026",
+                                        "Location": "MIAMI, US",
+                                    },
+                                    {
+                                        "Description": "Empty received at CY",
+                                        "Date": "20/07/2026",
+                                        "Location": "MIAMI, US",
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+        source="msc-playwright:test",
+        source_url="https://www.msc.com/en/track-a-shipment",
+        eta_only_mode=True,
+    )
+
+    assert [move.name for move in status.recent_moves] == [
+        "Container Gated In (GTIN)",
+        "Container Gated Out (GTOT)",
+    ]

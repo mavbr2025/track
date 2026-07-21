@@ -566,6 +566,16 @@ def _guess_dcsa_label_from_text(name: str | None) -> str | None:
         return _DCSA_EQUIPMENT_LABELS["GTOT"]
     if "empty container returned from customer" in normalized:
         return _DCSA_EQUIPMENT_LABELS["GTIN"]
+    # MSC uses these terminal messages instead of DCSA equipment codes. They
+    # represent the physical handoff to the consignee and the empty return.
+    if "import to consignee" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["GTOT"]
+    if "empty received at cy" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["GTIN"]
+    if "export received at cy" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["GTIN"]
+    if "empty to shipper" in normalized:
+        return _DCSA_EQUIPMENT_LABELS["GTOT"]
     if "arrival at port of discharge" in normalized or normalized.startswith("vessel arrival"):
         return _DCSA_TRANSPORT_LABELS["ARRI"]
     if "departure from port of loading" in normalized or normalized.startswith("vessel departure"):

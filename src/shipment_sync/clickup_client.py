@@ -1545,21 +1545,26 @@ def _build_move_field_updates(
     field_specs: list[tuple[str, str | None, str, bool]],
 ) -> list[ShipmentFieldWrite]:
     updates: list[ShipmentFieldWrite] = []
+    now_utc = datetime.now(timezone.utc)
     for event_code, field_id, label, actual_only in field_specs:
         if not field_id:
             continue
         move = next((candidate for candidate in moves if _event_code_from_move(candidate) == event_code), None)
         if move is None:
             continue
-        if actual_only and not _move_is_actual(move):
-            updates.append(
-                ShipmentFieldWrite(
-                    field_id=field_id,
-                    value=None,
-                    field_type="date",
-                    label=label,
+        if actual_only and not _move_is_effectively_actual(move, now_utc=now_utc):
+            # Preserve the established behavior for an explicit estimate, but
+            # do not discard an MSC completed event just because its feed omits
+            # an explicit actual/estimated state.
+            if _normalize_event_state(move.event_state) == "estimated":
+                updates.append(
+                    ShipmentFieldWrite(
+                        field_id=field_id,
+                        value=None,
+                        field_type="date",
+                        label=label,
+                    )
                 )
-            )
             continue
         date_value = _coerce_display_date(move.event_time_local_text, move.event_time)
         if date_value is None:
@@ -1796,6 +1801,14 @@ def _event_code_from_move(move: MovementEvent | None) -> str | None:
 
     normalized = move.name.strip().lower()
     if "empty container release to shipper" in normalized:
+        return "GTOT"
+    if "import to consignee" in normalized:
+        return "GTOT"
+    if "empty received at cy" in normalized:
+        return "GTIN"
+    if "export received at cy" in normalized:
+        return "GTIN"
+    if "empty to shipper" in normalized:
         return "GTOT"
     if "transport departed" in normalized:
         return "DEPA"

@@ -124,6 +124,48 @@ def test_plan_shipment_update_maps_origin_and_destination_events_to_fields() -> 
     assert "ETA (port local time): 2026-03-25 14:00" in plan.comment_text
 
 
+def test_plan_shipment_update_accepts_dated_msc_delivery_events_without_state() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-msc-terminal",
+        task_name="MSC terminal events",
+        shipping_line="msc",
+        booking_no="181AY0266397564A1",
+        container_no="MSMU4766813",
+        list_id="list-1",
+        list_name="RTA Shipments",
+        current_task_status="near arrival",
+    )
+    status = ShipmentStatus(
+        status_text="ETA unavailable",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="MIAMI, US",
+                event_time=_days_from_now(-1),
+            ),
+            MovementEvent(
+                name="Container Gated Out (GTOT)",
+                location="MIAMI, US",
+                event_time=_days_from_now(-7),
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="MIAMI, US",
+                event_time=_days_from_now(-11),
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+    updates = {update.label: update for update in plan.custom_field_updates}
+
+    assert updates["Discharge date"].value.date() == _days_from_now(-11).date()
+    assert updates["Gate out delivery"].value.date() == _days_from_now(-7).date()
+    assert updates["Gate in empty"].value.date() == _days_from_now(-1).date()
+    assert plan.task_status_update == "empty returned"
+
+
 def test_plan_shipment_update_does_not_update_task_status_even_when_enabled() -> None:
     client = ClickUpClient(
         _settings(
