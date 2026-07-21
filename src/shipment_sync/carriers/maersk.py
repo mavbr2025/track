@@ -780,6 +780,7 @@ def _extract_next_cursor(payload: object, *, cursor: str, page_size: int, count:
 def _status_from_events(events: list[dict], source: str, *, source_url: str | None) -> ShipmentStatus:
     ordered = sorted(events, key=_event_sort_key, reverse=True)
     latest = ordered[0]
+    final_arrival = _latest_estimated_transport_arrival(events)
     latest_move = _event_to_movement(latest)
     status_text = latest_move.name if latest_move and latest_move.name else "Unknown"
     location = extract_first(
@@ -800,19 +801,22 @@ def _status_from_events(events: list[dict], source: str, *, source_url: str | No
     detail_parts = [x for x in [event_type, classifier, movement_code] if x]
     movement_details = " / ".join(detail_parts) if detail_parts else None
     recent_moves = [_event_to_movement(event) for event in ordered]
-    vessel_voyage = extract_final_destination_vessel_voyage(events)
+    final_vessel_voyage = extract_event_vessel_voyage(final_arrival) if final_arrival else None
+    vessel_voyage = final_vessel_voyage or extract_final_destination_vessel_voyage(events)
+    eta_raw = _event_datetime_text(final_arrival) if final_arrival else _extract_eta_raw(latest)
     return ShipmentStatus(
         status_text=status_text,
         location=location,
         event_time=event_time,
-        eta_time=extract_eta_time(latest),
-        eta_local_text=_extract_eta_raw(latest),
+        eta_time=parse_event_time(eta_raw) or extract_eta_time(latest),
+        eta_local_text=eta_raw,
         latest_move=latest_move,
         recent_moves=recent_moves,
         raw_source=raw_source,
         source_url=source_url,
         movement_details=movement_details,
         vessel_voyage=vessel_voyage,
+        final_vessel_voyage=final_vessel_voyage,
     )
 
 
@@ -850,7 +854,7 @@ def _event_to_movement(event: dict) -> MovementEvent:
         or extract_first(event, ["dateTime"])
         or extract_first(event, ["timestamp"])
     )
-    classifier = extract_event_state_hint(event)
+    classifier = _event_classifier(event)
     return MovementEvent(
         name=name,
         location=location,
@@ -859,6 +863,35 @@ def _event_to_movement(event: dict) -> MovementEvent:
         event_state=_normalize_event_state(classifier),
         vessel_voyage=extract_event_vessel_voyage(event),
     )
+
+
+def _latest_estimated_transport_arrival(events: list[dict]) -> dict | None:
+    candidates = [
+        event
+        for event in events
+        if _event_classifier(event) == "estimated"
+        and _normalized_event_code(event.get("transportEventTypeCode")) == "ARRI"
+        and parse_event_time(_event_datetime_text(event)) is not None
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda event: parse_event_time(_event_datetime_text(event)).isoformat())
+
+
+def _event_classifier(event: dict) -> str | None:
+    for key in ("eventClassifierCode", "triggerType"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return _normalize_event_state(value)
+    return _normalize_event_state(extract_event_state_hint(event))
+
+
+def _event_datetime_text(event: dict) -> str | None:
+    return extract_first(event, ["eventDateTime", "eventLocalPortDate", "eventTime", "dateTime", "timestamp"])
+
+
+def _normalized_event_code(value: object) -> str:
+    return str(value or "").strip().upper()
 
 
 def _extract_eta_raw(payload: dict) -> str | None:

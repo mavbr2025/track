@@ -277,3 +277,45 @@ def test_maersk_status_sets_final_arrival_vessel_voyage() -> None:
     )
 
     assert status.vessel_voyage == "MAERSK FINAL 621E"
+
+
+def test_maersk_status_uses_estimated_final_arrival_for_eta_and_vessel() -> None:
+    status = _status_from_events(
+        [
+            {
+                "eventType": "TRANSPORT",
+                "eventClassifierCode": "ACT",
+                "transportEventTypeCode": "ARRI",
+                "eventDateTime": "2026-07-14T23:55:00-05:00",
+                "locationName": "BALBOA",
+                "vesselName": "POLAR PERU",
+                "carrierExportVoyageNumber": "626N",
+            },
+            {
+                "eventType": "TRANSPORT",
+                "eventClassifierCode": "EST",
+                "transportEventTypeCode": "DEPA",
+                "eventDateTime": "2026-07-31T23:00:00-05:00",
+                "locationName": "BALBOA",
+                "vesselName": "MAERSK SEQUOIA",
+                "carrierExportVoyageNumber": "631N",
+            },
+            {
+                "eventType": "TRANSPORT",
+                "eventClassifierCode": "EST",
+                "transportEventTypeCode": "ARRI",
+                "eventDateTime": "2026-08-03T15:00:00-06:00",
+                "locationName": "PUERTO QUETZAL",
+                "vesselName": "MAERSK SEQUOIA",
+                "carrierExportVoyageNumber": "631N",
+            },
+        ],
+        "maersk-events-api:test",
+        source_url="https://www.maersk.com/tracking/272124460",
+    )
+
+    assert status.eta_time == datetime(2026, 8, 3, 21, tzinfo=timezone.utc)
+    assert status.eta_local_text == "2026-08-03T15:00:00-06:00"
+    assert status.vessel_voyage == "MAERSK SEQUOIA 631N"
+    assert status.final_vessel_voyage == "MAERSK SEQUOIA 631N"
+    assert status.recent_moves[0].event_state == "estimated"

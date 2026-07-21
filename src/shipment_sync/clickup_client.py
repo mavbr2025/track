@@ -1265,13 +1265,6 @@ def _effective_vessel_voyage(
     field_values: dict[str, Any],
     now_utc: datetime,
 ) -> str | None:
-    actual_event_vessel_voyage = _latest_actual_event_vessel_voyage(status, now_utc=now_utc)
-    if actual_event_vessel_voyage:
-        return _enrich_voyage_only_event_vessel(
-            actual_event_vessel_voyage,
-            status.vessel_voyage,
-        )
-
     if _has_origin_barge_transit_move(
         shipment=shipment,
         status=status,
@@ -1283,10 +1276,22 @@ def _effective_vessel_voyage(
         return "BARGE"
 
     current_vessel_voyage = _field_string(settings.cf_vessel_voyage, field_values)
+    actual_event_vessel_voyage = _latest_actual_event_vessel_voyage(status, now_utc=now_utc)
     # Do not replace an active feeder-leg marker with a planned final vessel.
     # It advances only when a later vessel-bearing event is actually reported.
     if current_vessel_voyage and current_vessel_voyage.upper() == "BARGE":
-        return current_vessel_voyage
+        return actual_event_vessel_voyage or current_vessel_voyage
+
+    # Maersk exposes its final leg as an estimated ARRIVAL event. Keep that
+    # carrier-confirmed vessel visible before it departs the transshipment port.
+    if status.final_vessel_voyage:
+        return status.final_vessel_voyage.strip()
+
+    if actual_event_vessel_voyage:
+        return _enrich_voyage_only_event_vessel(
+            actual_event_vessel_voyage,
+            status.vessel_voyage,
+        )
 
     return (status.vessel_voyage or "").strip() or None
 

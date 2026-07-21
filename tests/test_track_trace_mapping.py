@@ -811,6 +811,38 @@ def test_plan_shipment_update_enriches_one_actual_voyage_with_matching_vessel_na
     assert updates["Vessel/Voyage"].value == "SEASPAN BRAVO 0103E"
 
 
+def test_plan_shipment_update_prefers_confirmed_final_vessel_before_departure() -> None:
+    client = ClickUpClient(_settings(cf_vessel_voyage="vessel-voyage-field"))
+    shipment = ShipmentRef(
+        task_id="task-maersk-final-leg",
+        task_name="Maersk final leg",
+        shipping_line="maersk",
+        booking_no="272124460",
+        container_no=None,
+        list_id="list-1",
+        current_field_values={"vessel-voyage-field": "POLAR PERU 626N"},
+    )
+    status = ShipmentStatus(
+        status_text="ETA future",
+        vessel_voyage="MAERSK SEQUOIA 631N",
+        final_vessel_voyage="MAERSK SEQUOIA 631N",
+        recent_moves=[
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="BALBOA",
+                event_time=_days_from_now(-2),
+                event_state="actual",
+                vessel_voyage="POLAR PERU 626N",
+            )
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+    updates = {update.label: update for update in plan.custom_field_updates}
+
+    assert updates["Vessel/Voyage"].value == "MAERSK SEQUOIA 631N"
+
+
 def test_plan_shipment_update_does_not_move_origin_port_for_future_etd_without_barge_leg() -> None:
     client = ClickUpClient(
         _settings(

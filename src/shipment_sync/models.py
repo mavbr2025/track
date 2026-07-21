@@ -36,6 +36,7 @@ class ShipmentStatus:
     source_url: str | None = None
     movement_details: str | None = None
     vessel_voyage: str | None = None
+    final_vessel_voyage: str | None = None
     booking_status_text: str | None = None
 
 
