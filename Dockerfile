@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright/python:v1.61.0-noble@sha256:a9731514f24121d1dcd25d58d0a38146646d290a5998fd80d3e533e7b5e21c69
+FROM mcr.microsoft.com/playwright/python:v1.61.0-resolute@sha256:ac650e6fadc8d551a602031cb27a2d19b91c9eef14fbe250850c297e4aa9cd21
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
