@@ -13,7 +13,20 @@ COPY pyproject.toml README.md requirements.lock build-requirements.lock /app/
 COPY src /app/src
 COPY scripts /app/scripts
 
-RUN python3 -m pip install --require-hashes -r /app/requirements.lock -r /app/build-requirements.lock && \
+RUN apt-get purge --auto-remove -y \
+        openssh-client \
+        curl \
+        libcurl4t64 \
+        libcurl3t64-gnutls \
+        ffmpeg \
+        libavcodec62 \
+        libavfilter11 \
+        libavformat62 \
+        libavutil60 \
+        libswresample6 \
+        libswscale9 && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m pip install --require-hashes -r /app/requirements.lock -r /app/build-requirements.lock && \
     python3 -m pip install --no-deps --no-build-isolation /app && \
     useradd --create-home --shell /usr/sbin/nologin appuser && \
     chown -R appuser:appuser /app && \
