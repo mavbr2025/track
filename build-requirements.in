@@ -1,0 +1,3 @@
+# PEP 517 build backend inputs for the local application package.
+setuptools>=68
+wheel

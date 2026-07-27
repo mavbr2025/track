@@ -178,12 +178,14 @@ def test_ambiguous_quote_match_is_skipped_without_writes() -> None:
 def test_deployment_build_uses_pinned_and_hashed_inputs() -> None:
     dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
     lockfile = (REPOSITORY_ROOT / "requirements.lock").read_text(encoding="utf-8")
+    build_lockfile = (REPOSITORY_ROOT / "build-requirements.lock").read_text(encoding="utf-8")
 
     assert "@sha256:" in dockerfile
     assert "--require-hashes -r /app/requirements.lock" in dockerfile
     assert "apt-get upgrade" not in dockerfile
     assert "playwright install" not in dockerfile
     assert "--hash=sha256:" in lockfile
+    assert "--hash=sha256:" in build_lockfile
 
 
 def test_lightsail_api_is_loopback_only() -> None:

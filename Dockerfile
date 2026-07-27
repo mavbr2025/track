@@ -9,11 +9,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md requirements.lock /app/
+COPY pyproject.toml README.md requirements.lock build-requirements.lock /app/
 COPY src /app/src
 COPY scripts /app/scripts
 
-RUN python3 -m pip install --require-hashes -r /app/requirements.lock && \
+RUN python3 -m pip install --require-hashes -r /app/requirements.lock -r /app/build-requirements.lock && \
     python3 -m pip install --no-deps --no-build-isolation /app && \
     useradd --create-home --shell /usr/sbin/nologin appuser && \
     chown -R appuser:appuser /app && \
