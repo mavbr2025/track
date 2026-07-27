@@ -13,7 +13,8 @@ COPY pyproject.toml README.md requirements.lock build-requirements.lock /app/
 COPY src /app/src
 COPY scripts /app/scripts
 
-RUN apt-get purge --auto-remove -y \
+RUN set -eux; \
+    for package in \
         openssh-client \
         curl \
         libcurl4t64 \
@@ -24,7 +25,11 @@ RUN apt-get purge --auto-remove -y \
         libavformat62 \
         libavutil60 \
         libswresample6 \
-        libswscale9 && \
+        libswscale9; do \
+        if dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -qx installed; then \
+            apt-get purge --auto-remove -y "$package"; \
+        fi; \
+    done; \
     rm -rf /var/lib/apt/lists/* && \
     python3 -m pip install --require-hashes -r /app/requirements.lock -r /app/build-requirements.lock && \
     python3 -m pip install --no-deps --no-build-isolation /app && \
