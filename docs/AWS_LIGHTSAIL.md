@@ -75,7 +75,13 @@ After the AWS test is approved, start the API and cron containers:
 docker compose -f deploy/aws-lightsail/docker-compose.yml up -d
 ```
 
-The API listens on container port `10000`. Open TCP port `10000` in the Lightsail instance Networking tab if external API access is required.
+The API listens on container port `10000`, but the compose definition binds it only to the instance loopback interface. Do not open TCP ports `80` or `10000` in the Lightsail Networking tab. Use an authenticated SSH tunnel for an operator session instead:
+
+```bash
+ssh -N -L 10000:127.0.0.1:10000 ubuntu@YOUR_LIGHTSAIL_HOST
+```
+
+Then use `http://127.0.0.1:10000` from the operator machine. A future public API must sit behind a managed TLS endpoint with authentication; it must not expose the container port directly.
 
 The cron container defaults to every 8 hours. Override it in `.env` if needed:
 

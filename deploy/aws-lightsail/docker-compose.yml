@@ -19,8 +19,7 @@ services:
     volumes:
       - ../../data:/data/shipment-sync
     ports:
-      - "80:10000"
-      - "10000:10000"
+      - "127.0.0.1:10000:10000"
     command: shipment-api
     restart: unless-stopped
 

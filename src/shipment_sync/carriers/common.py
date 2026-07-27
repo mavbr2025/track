@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime, timezone
 import json
+import os
 import re
 import time
 from typing import Any
@@ -44,6 +46,113 @@ _DCSA_SHIPMENT_LABELS: dict[str, str] = {
     "HOLD": "Shipment On Hold (HOLD)",
     "RELS": "Shipment Released (RELS)",
 }
+
+DEFAULT_CARRIER_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
+DEFAULT_CARRIER_PAYLOAD_MAX_NODES = 100_000
+DEFAULT_CARRIER_PAYLOAD_MAX_DEPTH = 64
+
+
+class CarrierResponseLimitError(ValueError):
+    """A configured carrier response exceeded the application's safety budget."""
+
+
+class CarrierPayloadLimitError(ValueError):
+    """A decoded carrier payload exceeded the application's traversal budget."""
+
+
+def carrier_response_max_bytes() -> int:
+    return _positive_env_int(
+        "CARRIER_RESPONSE_MAX_BYTES",
+        default=DEFAULT_CARRIER_RESPONSE_MAX_BYTES,
+    )
+
+
+def bounded_response_bytes(
+    response: requests.Response,
+    *,
+    max_bytes: int | None = None,
+) -> bytes:
+    """Read and cache a carrier response without allowing an unbounded body."""
+    limit = max_bytes if max_bytes is not None else carrier_response_max_bytes()
+    if limit < 1:
+        raise ValueError("Carrier response byte limit must be positive")
+
+    headers = getattr(response, "headers", {}) or {}
+    raw_content_length = headers.get("content-length") or headers.get("Content-Length")
+    if raw_content_length:
+        try:
+            declared_length = int(str(raw_content_length).strip())
+        except ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > limit:
+            _close_response(response)
+            raise CarrierResponseLimitError(
+                f"Carrier response declares {declared_length} bytes, exceeding the {limit}-byte limit"
+            )
+
+    if getattr(response, "_content_consumed", False):
+        cached = getattr(response, "content", b"")
+        if not isinstance(cached, bytes):
+            cached = bytes(cached)
+        if len(cached) > limit:
+            _close_response(response)
+            raise CarrierResponseLimitError(
+                f"Carrier response contains {len(cached)} bytes, exceeding the {limit}-byte limit"
+            )
+        return cached
+
+    iter_content = getattr(response, "iter_content", None)
+    if not callable(iter_content):
+        raw_body = getattr(response, "content", None)
+        if raw_body is None:
+            raw_body = str(getattr(response, "text", "")).encode("utf-8")
+        if not isinstance(raw_body, bytes):
+            raw_body = bytes(raw_body)
+        if len(raw_body) > limit:
+            _close_response(response)
+            raise CarrierResponseLimitError(
+                f"Carrier response contains {len(raw_body)} bytes, exceeding the {limit}-byte limit"
+            )
+        return raw_body
+
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > limit:
+            _close_response(response)
+            raise CarrierResponseLimitError(
+                f"Carrier response exceeds the {limit}-byte limit while streaming"
+            )
+        chunks.append(chunk)
+
+    body = b"".join(chunks)
+    try:
+        response._content = body
+        response._content_consumed = True
+    except Exception:
+        pass
+    return body
+
+
+def bounded_response_text(
+    response: requests.Response,
+    *,
+    max_bytes: int | None = None,
+) -> str:
+    body = bounded_response_bytes(response, max_bytes=max_bytes)
+    encoding = getattr(response, "encoding", None) or "utf-8"
+    return body.decode(encoding, errors="replace")
+
+
+def bounded_response_json(
+    response: requests.Response,
+    *,
+    max_bytes: int | None = None,
+) -> Any:
+    return json.loads(bounded_response_text(response, max_bytes=max_bytes))
 
 
 def to_dcsa_movement_name(
@@ -97,16 +206,11 @@ def to_dcsa_movement_name(
 
 def extract_first(payload: Any, candidate_keys: list[str]) -> str | None:
     wanted = {k.lower() for k in candidate_keys}
-    queue = [payload]
-    while queue:
-        item = queue.pop(0)
+    for item in _iter_payload_items(payload):
         if isinstance(item, dict):
             for key, value in item.items():
                 if key.lower() in wanted and isinstance(value, (str, int, float)):
                     return str(value)
-                queue.append(value)
-        elif isinstance(item, list):
-            queue.extend(item)
     return None
 
 
@@ -144,27 +248,10 @@ def extract_event_state_hint(event: dict[str, Any], extra_keys: list[str] | None
 
 def extract_container_numbers(payload: Any) -> list[str]:
     pattern = re.compile(r"\b([A-Za-z]{4}\d{7})\b")
-    queue = [payload]
-    seen_objects: set[int] = set()
     found: list[str] = []
     seen_tokens: set[str] = set()
 
-    while queue:
-        item = queue.pop(0)
-        item_id = id(item)
-        if item_id in seen_objects:
-            continue
-        seen_objects.add(item_id)
-
-        if isinstance(item, dict):
-            queue.extend(item.values())
-            continue
-        if isinstance(item, list):
-            queue.extend(item)
-            continue
-        if isinstance(item, tuple):
-            queue.extend(item)
-            continue
+    for item in _iter_payload_items(payload):
         if not isinstance(item, str):
             continue
 
@@ -479,9 +566,9 @@ def _parse_datetime_fallback(candidate: str) -> datetime | None:
 
 def extract_json_from_http_response(response: requests.Response) -> dict:
     content_type = (response.headers.get("content-type") or "").lower()
-    body = response.text
+    body = bounded_response_text(response)
     if "json" in content_type:
-        data = response.json()
+        data = json.loads(body)
         if isinstance(data, dict):
             return data
         return {"data": data}
@@ -528,10 +615,18 @@ def get_with_retries(
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
-            response = session.get(url, params=params, headers=headers, timeout=timeout_seconds)
+            response = session.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout_seconds,
+                allow_redirects=False,
+                stream=True,
+            )
             if non_retry_statuses and response.status_code in non_retry_statuses:
                 response.raise_for_status()
             response.raise_for_status()
+            bounded_response_bytes(response)
             return response
         except requests.RequestException as exc:
             last_error = exc
@@ -544,6 +639,64 @@ def get_with_retries(
     if last_error:
         raise last_error
     raise RuntimeError("Request failed without specific error")
+
+
+def _iter_payload_items(payload: Any):
+    max_nodes = _positive_env_int(
+        "CARRIER_PAYLOAD_MAX_NODES",
+        default=DEFAULT_CARRIER_PAYLOAD_MAX_NODES,
+    )
+    max_depth = _positive_env_int(
+        "CARRIER_PAYLOAD_MAX_DEPTH",
+        default=DEFAULT_CARRIER_PAYLOAD_MAX_DEPTH,
+    )
+    queue: deque[tuple[Any, int]] = deque([(payload, 0)])
+    seen_containers: set[int] = set()
+    nodes_seen = 0
+
+    while queue:
+        item, depth = queue.popleft()
+        nodes_seen += 1
+        if nodes_seen > max_nodes:
+            raise CarrierPayloadLimitError(
+                f"Carrier payload exceeds the {max_nodes}-node traversal limit"
+            )
+        if depth > max_depth:
+            raise CarrierPayloadLimitError(
+                f"Carrier payload exceeds the {max_depth}-level nesting limit"
+            )
+
+        yield item
+
+        if isinstance(item, dict):
+            item_id = id(item)
+            if item_id in seen_containers:
+                continue
+            seen_containers.add(item_id)
+            queue.extend((value, depth + 1) for value in item.values())
+        elif isinstance(item, (list, tuple)):
+            item_id = id(item)
+            if item_id in seen_containers:
+                continue
+            seen_containers.add(item_id)
+            queue.extend((value, depth + 1) for value in item)
+
+
+def _positive_env_int(name: str, *, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw.strip())
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _close_response(response: requests.Response) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
 
 
 def _normalized_code(value: str | None) -> str | None:

@@ -65,7 +65,7 @@ MSC day-one requirement:
 - keep `MSC_USE_PLAYWRIGHT=true`
 - keep `MSC_PLAYWRIGHT_REQUIRED=true`
 - use `MSC_PLAYWRIGHT_BROWSER=chromium`
-- keep `MSC_PLAYWRIGHT_CHANNEL=chrome`
+- leave `MSC_PLAYWRIGHT_CHANNEL` blank to use the pinned Playwright Chromium
 - keep `MSC_PLAYWRIGHT_HEADLESS=true`
 - start with `MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=20`
 - start with `MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS=1`
@@ -74,7 +74,7 @@ Hapag-Lloyd browser mode:
 - keep `HAPAG_USE_PLAYWRIGHT=true`
 - keep `HAPAG_PLAYWRIGHT_REQUIRED=false`
 - use `HAPAG_PLAYWRIGHT_BROWSER=chromium`
-- keep `HAPAG_PLAYWRIGHT_CHANNEL=chrome`
+- leave `HAPAG_PLAYWRIGHT_CHANNEL` blank to use the pinned Playwright Chromium
 - keep `HAPAG_PLAYWRIGHT_HEADLESS=true`
 - keep `HAPAG_PLAYWRIGHT_VIEW=S8510`
 - start with `HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=45`
@@ -86,7 +86,7 @@ Wan Hai browser mode:
 - keep `WAN_HAI_USE_PLAYWRIGHT=true`
 - keep `WAN_HAI_PLAYWRIGHT_REQUIRED=false`
 - use `WAN_HAI_PLAYWRIGHT_BROWSER=chromium`
-- keep `WAN_HAI_PLAYWRIGHT_CHANNEL=chrome`
+- leave `WAN_HAI_PLAYWRIGHT_CHANNEL` blank to use the pinned Playwright Chromium
 - keep `WAN_HAI_PLAYWRIGHT_HEADLESS=true`
 
 Important:
@@ -97,11 +97,11 @@ Important:
 
 For an immediate trigger from ClickUp Automation Webhooks, call:
 
-`POST https://<your-render-domain>/webhooks/clickup/track-trace?token=<SHIPMENT_API_TRIGGER_TOKEN>`
+`POST https://<your-render-domain>/webhooks/clickup/track-trace`
 
 You can also trigger manually with:
 
-`POST https://<your-render-domain>/track-trace/run?token=<SHIPMENT_API_TRIGGER_TOKEN>`
+`POST https://<your-render-domain>/track-trace/run`
 
 The protected routes also accept:
 - `Authorization: Bearer <SHIPMENT_API_TRIGGER_TOKEN>`
@@ -128,7 +128,7 @@ Optional operational checks:
 - `https://<your-render-domain>/health`
 - `https://<your-render-domain>/track-trace/requirements`
 6. Trigger a manual test:
-- `POST /track-trace/run?token=<SHIPMENT_API_TRIGGER_TOKEN>`
+- `POST /track-trace/run` with `Authorization: Bearer <SHIPMENT_API_TRIGGER_TOKEN>`
 7. Confirm updates land back in ClickUp.
 8. Add the ClickUp Automation Webhook URL.
 9. Leave cron enabled as the safety net.

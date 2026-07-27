@@ -10,6 +10,7 @@ from shipment_sync.config import Settings
 from shipment_sync.date_utils import format_port_local_time
 from shipment_sync.models import ShipmentRef, ShipmentUpdatePlan
 from shipment_sync.sync import run_sync
+from shipment_sync.terminal import terminal_safe_text
 
 
 def main() -> None:
@@ -44,14 +45,16 @@ def main() -> None:
                 label = f"{s.list_name} ({s.list_id})" if s.list_name else s.list_id
                 by_list[label] = by_list.get(label, 0) + 1
                 print(
-                    f"- [{label}] {s.task_name} | line={s.shipping_line} | "
-                    f"booking={s.booking_no} | container={s.container_no}"
+                    terminal_safe_text(
+                        f"- [{label}] {s.task_name} | line={s.shipping_line} | "
+                        f"booking={s.booking_no} | container={s.container_no}"
+                    )
                 )
 
             if by_list:
                 print("Candidates by list:")
                 for label, count in sorted(by_list.items()):
-                    print(f"- {label}: {count}")
+                    print(terminal_safe_text(f"- {label}: {count}"))
             return
 
         if args.preview_updates:
@@ -69,17 +72,17 @@ def main() -> None:
         if stats.candidates_by_list:
             print("Candidates by list:")
             for label, count in sorted(stats.candidates_by_list.items()):
-                print(f"- {label}: {count}")
+                print(terminal_safe_text(f"- {label}: {count}"))
 
         if stats.updated_by_list:
             print("Updated by list:")
             for label, count in sorted(stats.updated_by_list.items()):
-                print(f"- {label}: {count}")
+                print(terminal_safe_text(f"- {label}: {count}"))
 
         if stats.unchanged_by_list:
             print("Unchanged by list:")
             for label, count in sorted(stats.unchanged_by_list.items()):
-                print(f"- {label}: {count}")
+                print(terminal_safe_text(f"- {label}: {count}"))
 
         if updated_items:
             print("Updated shipments:")
@@ -100,29 +103,33 @@ def main() -> None:
                         latest_move_bits.append(f"vessel_voyage={item.vessel_voyage}")
                     latest_move_suffix = f" | {' | '.join(latest_move_bits)}" if latest_move_bits else ""
                     print(
-                        f"- [{label}] {item.task_name} | line={item.shipping_line} | "
-                        f"booking={item.booking_no} | container={item.container_no} | "
-                        f"eta_local={eta_text}{latest_move_suffix}"
+                        terminal_safe_text(
+                            f"- [{label}] {item.task_name} | line={item.shipping_line} | "
+                            f"booking={item.booking_no} | container={item.container_no} | "
+                            f"eta_local={eta_text}{latest_move_suffix}"
+                        )
                     )
                 else:
                     time_text = item.event_time.date().isoformat() if item.event_time else "n/a"
                     movement_text = item.movement_details if item.movement_details else "n/a"
                     location_text = item.location if item.location else "n/a"
                     print(
-                        f"- [{label}] {item.task_name} | line={item.shipping_line} | "
-                        f"booking={item.booking_no} | container={item.container_no} | "
-                        f"status={item.status_text} | location={location_text} | "
-                        f"last_move_time={time_text} | eta_local={eta_text} | "
-                        f"last_move={movement_text}"
+                        terminal_safe_text(
+                            f"- [{label}] {item.task_name} | line={item.shipping_line} | "
+                            f"booking={item.booking_no} | container={item.container_no} | "
+                            f"status={item.status_text} | location={location_text} | "
+                            f"last_move_time={time_text} | eta_local={eta_text} | "
+                            f"last_move={movement_text}"
+                        )
                     )
     except requests.HTTPError as exc:
         _print_http_error(exc)
         raise SystemExit(1) from exc
     except requests.RequestException as exc:
-        print(f"Network request failed: {exc}", file=sys.stderr)
+        print(terminal_safe_text(f"Network request failed: {exc}"), file=sys.stderr)
         raise SystemExit(1) from exc
     except ValueError as exc:
-        print(str(exc), file=sys.stderr)
+        print(terminal_safe_text(exc), file=sys.stderr)
         raise SystemExit(1) from exc
 
 
@@ -162,8 +169,10 @@ def _preview_updates(client: ClickUpClient, shipments: list[ShipmentRef]) -> Non
         adapter = adapters.get(shipment.shipping_line)
         if adapter is None:
             print(
-                f"- {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
-                "no adapter registered"
+                terminal_safe_text(
+                    f"- {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
+                    "no adapter registered"
+                )
             )
             continue
 
@@ -173,32 +182,36 @@ def _preview_updates(client: ClickUpClient, shipments: list[ShipmentRef]) -> Non
             _print_preview_plan(shipment, plan)
         except Exception as exc:
             print(
-                f"- {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
-                f"skipped: {exc}"
+                terminal_safe_text(
+                    f"- {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
+                    f"skipped: {exc}"
+                )
             )
 
 
 def _print_preview_plan(shipment: ShipmentRef, plan: ShipmentUpdatePlan) -> None:
     label = f"{shipment.list_name} ({shipment.list_id})" if shipment.list_name else shipment.list_id
     print(
-        f"- [{label}] {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
-        f"booking={shipment.booking_no} | container={shipment.container_no} | changed={plan.changed}"
+        terminal_safe_text(
+            f"- [{label}] {shipment.task_name} | task={shipment.task_id} | line={shipment.shipping_line} | "
+            f"booking={shipment.booking_no} | container={shipment.container_no} | changed={plan.changed}"
+        )
     )
     if plan.custom_field_updates:
         print("  Planned field writes:")
         for update in plan.custom_field_updates:
             value = update.value.isoformat() if hasattr(update.value, "isoformat") else str(update.value)
             label = update.label or update.field_id
-            print(f"  - {label}: {value} [{update.field_id}]")
+            print(terminal_safe_text(f"  - {label}: {value} [{update.field_id}]"))
     else:
         print("  Planned field writes: none")
 
     if plan.task_status_update:
-        print(f"  Planned task status: {plan.task_status_update}")
+        print(terminal_safe_text(f"  Planned task status: {plan.task_status_update}"))
     if plan.comment_text:
         print("  Planned comment:")
         for line in plan.comment_text.splitlines():
-            print(f"    {line}")
+            print(terminal_safe_text(f"    {line}"))
     else:
         print("  Planned comment: none")
 
@@ -210,12 +223,12 @@ def _format_port_local(local_text: str | None, event_time) -> str:
 def _print_http_error(exc: requests.HTTPError) -> None:
     response = exc.response
     if response is None:
-        print(f"HTTP request failed: {exc}", file=sys.stderr)
+        print(terminal_safe_text(f"HTTP request failed: {exc}"), file=sys.stderr)
         return
 
     url = response.url or "unknown URL"
     status_code = response.status_code
-    print(f"HTTP {status_code} while calling {url}", file=sys.stderr)
+    print(terminal_safe_text(f"HTTP {status_code} while calling {url}"), file=sys.stderr)
 
     if status_code == 401 and "api.clickup.com" in url:
         print("ClickUp authorization failed.", file=sys.stderr)
@@ -229,7 +242,7 @@ def _print_http_error(exc: requests.HTTPError) -> None:
 
     snippet = (response.text or "").strip().replace("\n", " ")[:240]
     if snippet:
-        print(f"Response snippet: {snippet}", file=sys.stderr)
+        print(terminal_safe_text(f"Response snippet: {snippet}"), file=sys.stderr)
 
 
 if __name__ == "__main__":

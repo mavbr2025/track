@@ -16,6 +16,9 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    bounded_response_bytes,
+    bounded_response_json,
+    bounded_response_text,
     extract_container_numbers,
     extract_event_vessel_voyage,
     extract_eta_time,
@@ -231,10 +234,18 @@ class CoscoAdapter(CarrierAdapter):
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = self.session.get(url, headers=headers, timeout=self.timeout_seconds)
+                response = self.session.get(
+                    url,
+                    headers=headers,
+                    timeout=self.timeout_seconds,
+                    allow_redirects=False,
+                    stream=True,
+                )
                 if response.status_code >= 500 and attempt < self.max_retries:
+                    response.close()
                     time.sleep(self.retry_delay_seconds * (attempt + 1))
                     continue
+                bounded_response_bytes(response)
                 return response
             except requests.RequestException as exc:
                 last_error = exc
@@ -247,13 +258,14 @@ class CoscoAdapter(CarrierAdapter):
         raise RuntimeError("COSCO request failed without specific error")
 
     def _parse_json_response(self, response: requests.Response, *, error_prefix: str) -> dict[str, Any]:
+        body = bounded_response_text(response)
         if response.status_code >= 400:
-            snippet = (response.text or "").strip().replace("\n", " ")[:300]
+            snippet = body.strip().replace("\n", " ")[:300]
             raise ValueError(f"{error_prefix} request failed HTTP {response.status_code}: {snippet}")
         try:
-            payload = response.json()
+            payload = bounded_response_json(response)
         except Exception:
-            snippet = (response.text or "").strip().replace("\n", " ")[:300]
+            snippet = body.strip().replace("\n", " ")[:300]
             raise ValueError(f"{error_prefix} response is not JSON: {snippet}")
         if isinstance(payload, dict):
             return payload
@@ -261,7 +273,7 @@ class CoscoAdapter(CarrierAdapter):
 
     def _extract_legacy_payload(self, response: requests.Response) -> dict[str, Any]:
         content_type = (response.headers.get("content-type") or "").lower()
-        body = response.text or ""
+        body = bounded_response_text(response)
 
         if response.status_code >= 400:
             if _is_legacy_block_page(body):
@@ -270,7 +282,7 @@ class CoscoAdapter(CarrierAdapter):
             raise ValueError(f"COSCO legacy endpoint returned HTTP {response.status_code}: {snippet}")
 
         if "json" in content_type:
-            parsed = response.json()
+            parsed = bounded_response_json(response)
             if isinstance(parsed, dict):
                 return parsed
             return {"data": parsed}
@@ -286,9 +298,10 @@ class CoscoAdapter(CarrierAdapter):
 
     def _request_with_cookie_challenge(self, url: str) -> requests.Response:
         response = self._request_with_retries(url=url)
-        if _is_legacy_block_page(response.text):
+        response_text = bounded_response_text(response)
+        if _is_legacy_block_page(response_text):
             host = "elines.coscoshipping.com"
-            if _apply_cookie_script(self.session, response.text, host=host):
+            if _apply_cookie_script(self.session, response_text, host=host):
                 response = self._request_with_retries(url=url)
         return response
 

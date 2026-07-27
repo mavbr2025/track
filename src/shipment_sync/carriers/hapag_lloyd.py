@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    bounded_response_json,
     extract_container_numbers,
     extract_event_vessel_voyage,
     extract_event_state_hint,
@@ -22,7 +23,7 @@ from shipment_sync.carriers.common import (
     to_dcsa_movement_name,
 )
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
-from shipment_sync.playwright_runner import run_sync_playwright
+from shipment_sync.playwright_runner import configured_browser_channel, run_sync_playwright
 
 
 class HapagLloydAdapter(CarrierAdapter):
@@ -35,7 +36,7 @@ class HapagLloydAdapter(CarrierAdapter):
         self.playwright_request_delay_seconds = float(os.getenv("HAPAG_PLAYWRIGHT_REQUEST_DELAY_SECONDS", "6"))
         self.playwright_warmup_seconds = float(os.getenv("HAPAG_PLAYWRIGHT_WARMUP_SECONDS", "4"))
         self.playwright_browser = os.getenv("HAPAG_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
-        self.playwright_channel = os.getenv("HAPAG_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
+        self.playwright_channel = os.getenv("HAPAG_PLAYWRIGHT_CHANNEL", "").strip()
         self.playwright_locale = os.getenv("HAPAG_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
         self.playwright_challenge_timeout_seconds = int(os.getenv("HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS", "20"))
         self.playwright_challenge_reload_attempts = int(os.getenv("HAPAG_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS", "1"))
@@ -348,8 +349,12 @@ class HapagLloydAdapter(CarrierAdapter):
             "headless": self.playwright_headless,
             "args": ["--disable-blink-features=AutomationControlled"],
         }
-        if self.playwright_channel and self.playwright_browser == "chromium":
-            launch_kwargs["channel"] = self.playwright_channel
+        channel = configured_browser_channel(
+            self.playwright_channel,
+            browser_name=self.playwright_browser,
+        )
+        if channel:
+            launch_kwargs["channel"] = channel
 
         browser = browser_type.launch(**launch_kwargs)
         context = browser.new_context(
@@ -490,9 +495,11 @@ class HapagLloydAdapter(CarrierAdapter):
                     data=attempt["data"],
                     headers=headers,
                     timeout=self.timeout_seconds,
+                    allow_redirects=False,
+                    stream=True,
                 )
                 response.raise_for_status()
-                payload = response.json()
+                payload = bounded_response_json(response)
                 token = payload.get("access_token")
                 if isinstance(token, str) and token:
                     expires_in = payload.get("expires_in", 300)

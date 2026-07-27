@@ -11,6 +11,7 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    bounded_response_text,
     extract_container_numbers,
     extract_event_vessel_voyage,
     extract_final_destination_vessel_voyage,
@@ -22,7 +23,7 @@ from shipment_sync.carriers.common import (
     to_dcsa_movement_name,
 )
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
-from shipment_sync.playwright_runner import run_sync_playwright
+from shipment_sync.playwright_runner import configured_browser_channel, run_sync_playwright
 
 
 class CmaCgmAdapter(CarrierAdapter):
@@ -34,7 +35,7 @@ class CmaCgmAdapter(CarrierAdapter):
         self.playwright_timeout_seconds = int(os.getenv("CMA_CGM_PLAYWRIGHT_TIMEOUT_SECONDS", "90"))
         self.playwright_wait_seconds = float(os.getenv("CMA_CGM_PLAYWRIGHT_WAIT_SECONDS", "8"))
         self.playwright_browser = os.getenv("CMA_CGM_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
-        self.playwright_channel = os.getenv("CMA_CGM_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
+        self.playwright_channel = os.getenv("CMA_CGM_PLAYWRIGHT_CHANNEL", "").strip()
         self.playwright_locale = os.getenv("CMA_CGM_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
         self.playwright_warmup_url = (
             os.getenv("CMA_CGM_PLAYWRIGHT_WARMUP_URL", "https://www.cma-cgm.com/ebusiness/tracking").strip()
@@ -183,8 +184,12 @@ class CmaCgmAdapter(CarrierAdapter):
                     "headless": self.playwright_headless,
                     "args": ["--disable-blink-features=AutomationControlled"],
                 }
-                if self.playwright_channel and self.playwright_browser == "chromium":
-                    launch_kwargs["channel"] = self.playwright_channel
+                channel = configured_browser_channel(
+                    self.playwright_channel,
+                    browser_name=self.playwright_browser,
+                )
+                if channel:
+                    launch_kwargs["channel"] = channel
 
                 browser = browser_type.launch(**launch_kwargs)
                 try:
@@ -322,9 +327,12 @@ class CmaCgmAdapter(CarrierAdapter):
                     params=params,
                     headers=headers,
                     timeout=self.timeout_seconds,
+                    allow_redirects=False,
+                    stream=True,
                 )
+                body = bounded_response_text(response)
                 if response.status_code >= 400:
-                    if _is_challenge_page(response.text):
+                    if _is_challenge_page(body):
                         raise ValueError("CMA-CGM endpoint blocked by anti-bot challenge")
                     response.raise_for_status()
                 return response
@@ -341,7 +349,7 @@ class CmaCgmAdapter(CarrierAdapter):
         raise RuntimeError("CMA-CGM request failed without specific error")
 
     def _parse_payload(self, response: requests.Response) -> dict[str, Any]:
-        if _is_challenge_page(response.text):
+        if _is_challenge_page(bounded_response_text(response)):
             raise ValueError("CMA-CGM endpoint blocked by anti-bot challenge")
         try:
             payload = extract_json_from_http_response(response)

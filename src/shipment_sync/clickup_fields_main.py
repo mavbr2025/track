@@ -529,7 +529,7 @@ def _write_csv(path_text: str, rows: list[dict[str, str]], *, headers: list[str]
         writer = csv.DictWriter(handle, fieldnames=headers)
         writer.writeheader()
         for row in rows:
-            writer.writerow({header: row.get(header, "") for header in headers})
+            writer.writerow({header: _spreadsheet_safe_cell(row.get(header, "")) for header in headers})
 
 
 def _write_xlsx(path_text: str, rows: list[dict[str, str]], *, headers: list[str]) -> None:
@@ -548,8 +548,18 @@ def _write_xlsx(path_text: str, rows: list[dict[str, str]], *, headers: list[str
     sheet.title = "fields"
     sheet.append(headers)
     for row in rows:
-        sheet.append([row.get(header, "") for header in headers])
+        sheet.append([_spreadsheet_safe_cell(row.get(header, "")) for header in headers])
     workbook.save(path)
+
+
+def _spreadsheet_safe_cell(value: Any) -> Any:
+    """Keep ClickUp-derived text literal in formula-aware spreadsheet clients."""
+    if not isinstance(value, str):
+        return value
+    stripped = value.lstrip()
+    if stripped.startswith(("=", "+", "-", "@")):
+        return f"'{value}"
+    return value
 
 
 def _normalize_flag(value: Any) -> str:

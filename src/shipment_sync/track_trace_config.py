@@ -18,10 +18,14 @@ class TrackTraceConfigReport:
 @dataclass
 class ApiTriggerSettings:
     trigger_token: str | None
+    allow_query_token: bool
 
     @classmethod
     def from_env(cls) -> "ApiTriggerSettings":
-        return cls(trigger_token=_optional("SHIPMENT_API_TRIGGER_TOKEN"))
+        return cls(
+            trigger_token=_optional("SHIPMENT_API_TRIGGER_TOKEN"),
+            allow_query_token=_bool("SHIPMENT_API_ALLOW_QUERY_TOKEN", default=False),
+        )
 
 
 def inspect_track_trace_env() -> TrackTraceConfigReport:
@@ -34,6 +38,7 @@ def inspect_track_trace_env() -> TrackTraceConfigReport:
     ]
     recommended_items = [
         "SHIPMENT_API_TRIGGER_TOKEN",
+        "SHIPMENT_API_ALLOW_QUERY_TOKEN=false",
         "CLICKUP_CF_STATUS_LAST_CHECKED",
         "CLICKUP_CF_SHIPMENT_STATUS or CLICKUP_USE_TASK_STATUS",
     ]
@@ -54,6 +59,8 @@ def inspect_track_trace_env() -> TrackTraceConfigReport:
     for key in ("SHIPMENT_API_TRIGGER_TOKEN", "CLICKUP_CF_STATUS_LAST_CHECKED"):
         if not _optional(key):
             missing_recommended_items.append(key)
+    if _bool("SHIPMENT_API_ALLOW_QUERY_TOKEN", default=False):
+        missing_recommended_items.append("SHIPMENT_API_ALLOW_QUERY_TOKEN=false")
     has_status_destination = bool(_optional("CLICKUP_CF_SHIPMENT_STATUS")) or (
         _bool("CLICKUP_USE_TASK_STATUS", default=False)
     )
@@ -64,7 +71,8 @@ def inspect_track_trace_env() -> TrackTraceConfigReport:
     has_trigger_token = bool(_optional("SHIPMENT_API_TRIGGER_TOKEN"))
 
     notes = [
-        "Set SHIPMENT_API_TRIGGER_TOKEN before exposing trigger endpoints publicly.",
+        "Set SHIPMENT_API_TRIGGER_TOKEN before exposing trigger endpoints publicly; protected endpoints fail closed when it is missing.",
+        "Pass trigger tokens in Authorization: Bearer or X-Trigger-Token headers. Query-string tokens are disabled unless SHIPMENT_API_ALLOW_QUERY_TOKEN=true.",
         "Use CLICKUP_CF_STATUS_LAST_CHECKED together with SHIPMENT_MIN_SYNC_INTERVAL_HOURS to avoid unnecessary carrier calls.",
         "Use CLICKUP_CF_SHIPMENT_STATUS for a dedicated ClickUp custom field, or CLICKUP_USE_TASK_STATUS for task-level operational status progression.",
     ]

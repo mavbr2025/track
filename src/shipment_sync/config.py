@@ -85,6 +85,10 @@ class Settings:
     clickup_discovery_list_name_exclude: list[str] | None = None
     clickup_discovery_cache_path: str | None = None
     clickup_discovery_cache_ttl_seconds: int = 86400
+    clickup_max_lists_per_run: int = 100
+    clickup_max_pages_per_list: int = 250
+    clickup_max_tasks_per_list: int = 25_000
+    clickup_max_total_tasks: int = 50_000
 
     @property
     def clickup_auth_header_value(self) -> str:
@@ -151,6 +155,10 @@ class Settings:
                 default=86400,
                 min_value=0,
             ),
+            clickup_max_lists_per_run=_int("CLICKUP_MAX_LISTS_PER_RUN", default=100),
+            clickup_max_pages_per_list=_int("CLICKUP_MAX_PAGES_PER_LIST", default=250),
+            clickup_max_tasks_per_list=_int("CLICKUP_MAX_TASKS_PER_LIST", default=25_000),
+            clickup_max_total_tasks=_int("CLICKUP_MAX_TOTAL_TASKS", default=50_000),
             cf_container_no=_must("CLICKUP_CF_CONTAINER_NO"),
             cf_booking_no=_must("CLICKUP_CF_BOOKING_NO"),
             cf_shipping_line=_must("CLICKUP_CF_SHIPPING_LINE"),

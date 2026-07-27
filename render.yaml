@@ -58,7 +58,7 @@ services:
       - key: MSC_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: MSC_PLAYWRIGHT_CHANNEL
-        value: "chrome"
+        value: ""
       - key: MSC_PLAYWRIGHT_HEADLESS
         value: "true"
       - key: HAPAG_USE_PLAYWRIGHT
@@ -68,7 +68,7 @@ services:
       - key: HAPAG_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: HAPAG_PLAYWRIGHT_CHANNEL
-        value: "chrome"
+        value: ""
       - key: HAPAG_PLAYWRIGHT_HEADLESS
         value: "true"
       - key: HAPAG_PLAYWRIGHT_VIEW
@@ -86,7 +86,7 @@ services:
       - key: WAN_HAI_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: WAN_HAI_PLAYWRIGHT_CHANNEL
-        value: "chrome"
+        value: ""
       - key: WAN_HAI_PLAYWRIGHT_HEADLESS
         value: "true"
       - key: CMA_CGM_USE_PLAYWRIGHT
@@ -96,7 +96,7 @@ services:
       - key: CMA_CGM_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: CMA_CGM_PLAYWRIGHT_CHANNEL
-        value: "chrome"
+        value: ""
       - key: CMA_CGM_PLAYWRIGHT_HEADLESS
         value: "true"
       - key: CMA_CGM_PLAYWRIGHT_WARMUP_URL
@@ -158,7 +158,7 @@ services:
       - key: MSC_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: MSC_PLAYWRIGHT_CHANNEL
-        value: "chrome"
+        value: ""
       - key: MSC_PLAYWRIGHT_HEADLESS
         value: "true"
       - key: HAPAG_USE_PLAYWRIGHT
@@ -168,7 +168,7 @@ services:
       - key: HAPAG_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: HAPAG_PLAYWRIGHT_CHANNEL
-        value: "chrome"
+        value: ""
       - key: HAPAG_PLAYWRIGHT_HEADLESS
         value: "true"
       - key: HAPAG_PLAYWRIGHT_VIEW
@@ -186,7 +186,7 @@ services:
       - key: WAN_HAI_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: WAN_HAI_PLAYWRIGHT_CHANNEL
-        value: "chrome"
+        value: ""
       - key: WAN_HAI_PLAYWRIGHT_HEADLESS
         value: "true"
       - key: CMA_CGM_USE_PLAYWRIGHT
@@ -196,7 +196,7 @@ services:
       - key: CMA_CGM_PLAYWRIGHT_BROWSER
         value: "chromium"
       - key: CMA_CGM_PLAYWRIGHT_CHANNEL
-        value: "chrome"
+        value: ""
       - key: CMA_CGM_PLAYWRIGHT_HEADLESS
         value: "true"
       - key: CMA_CGM_PLAYWRIGHT_WARMUP_URL

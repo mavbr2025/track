@@ -10,6 +10,7 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    bounded_response_text,
     extract_container_numbers,
     extract_event_state_hint,
     extract_eta_time,
@@ -170,7 +171,7 @@ class GenericLineAdapter(CarrierAdapter):
         )
 
     def _parse_payload(self, response: requests.Response) -> dict[str, Any]:
-        body = response.text or ""
+        body = bounded_response_text(response)
         normalized = body.lower()
         if self._looks_blocked(normalized):
             raise ValueError(f"{self.line_label} endpoint blocked by anti-bot challenge")

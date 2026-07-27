@@ -8,6 +8,7 @@ from typing import Any
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    carrier_response_max_bytes,
     extract_container_numbers,
     extract_event_vessel_voyage,
     extract_event_state_hint,
@@ -18,7 +19,7 @@ from shipment_sync.carriers.common import (
 )
 from shipment_sync.carriers.generic_line import GenericLineAdapter
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
-from shipment_sync.playwright_runner import run_sync_playwright
+from shipment_sync.playwright_runner import configured_browser_channel, run_sync_playwright
 
 
 class MscAdapter(CarrierAdapter):
@@ -30,7 +31,7 @@ class MscAdapter(CarrierAdapter):
         self.playwright_timeout_seconds = int(os.getenv("MSC_PLAYWRIGHT_TIMEOUT_SECONDS", "90"))
         self.playwright_request_delay_seconds = float(os.getenv("MSC_PLAYWRIGHT_REQUEST_DELAY_SECONDS", "0.5"))
         self.playwright_browser = os.getenv("MSC_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
-        self.playwright_channel = os.getenv("MSC_PLAYWRIGHT_CHANNEL", "chrome").strip() or "chrome"
+        self.playwright_channel = os.getenv("MSC_PLAYWRIGHT_CHANNEL", "").strip()
         self.playwright_locale = os.getenv("MSC_PLAYWRIGHT_LOCALE", "en-US").strip() or "en-US"
         self.playwright_challenge_timeout_seconds = int(os.getenv("MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS", "20"))
         self.playwright_challenge_reload_attempts = int(os.getenv("MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS", "1"))
@@ -60,6 +61,7 @@ class MscAdapter(CarrierAdapter):
         self.max_retries = int(os.getenv("MSC_MAX_RETRIES", "2"))
         self.retry_delay_seconds = float(os.getenv("MSC_RETRY_DELAY_SECONDS", "2"))
         self.max_reference_attempts = _int_env("MSC_MAX_REFERENCE_ATTEMPTS", default=4, minimum=0)
+        self.response_max_bytes = carrier_response_max_bytes()
 
         self.generic_fallback = GenericLineAdapter(
             env_prefix="MSC",
@@ -141,8 +143,12 @@ class MscAdapter(CarrierAdapter):
                     "headless": self.playwright_headless,
                     "args": ["--disable-blink-features=AutomationControlled"],
                 }
-                if self.playwright_channel and self.playwright_browser == "chromium":
-                    launch_kwargs["channel"] = self.playwright_channel
+                channel = configured_browser_channel(
+                    self.playwright_channel,
+                    browser_name=self.playwright_browser,
+                )
+                if channel:
+                    launch_kwargs["channel"] = channel
 
                 browser = browser_type.launch(**launch_kwargs)
                 try:
@@ -185,7 +191,7 @@ class MscAdapter(CarrierAdapter):
 
                     response_payload = page.evaluate(
                         """
-                        async ({ url, token, trackingMode, reference }) => {
+                        async ({ url, token, trackingMode, reference, maxBytes }) => {
                             const body = new URLSearchParams({
                                 "__RequestVerificationToken": token,
                                 "trackingMode": trackingMode,
@@ -201,10 +207,47 @@ class MscAdapter(CarrierAdapter):
                                 },
                                 body,
                             });
-                            const text = await response.text();
+                            const declaredLength = Number(response.headers.get("content-length") || "0");
+                            if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+                                return {
+                                    status: response.status,
+                                    responseTooLarge: true,
+                                    responseBytes: declaredLength,
+                                    url: response.url,
+                                };
+                            }
+                            const reader = response.body?.getReader();
+                            if (!reader) {
+                                throw new Error("MSC TrackingInfo response has no readable body");
+                            }
+                            let total = 0;
+                            const chunks = [];
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+                                total += value.byteLength;
+                                if (total > maxBytes) {
+                                    await reader.cancel();
+                                    return {
+                                        status: response.status,
+                                        responseTooLarge: true,
+                                        responseBytes: total,
+                                        url: response.url,
+                                    };
+                                }
+                                chunks.push(value);
+                            }
+                            const bytes = new Uint8Array(total);
+                            let offset = 0;
+                            for (const chunk of chunks) {
+                                bytes.set(chunk, offset);
+                                offset += chunk.byteLength;
+                            }
+                            const text = new TextDecoder().decode(bytes);
                             return {
                                 status: response.status,
                                 text,
+                                responseBytes: total,
                                 url: response.url,
                             };
                         }
@@ -214,9 +257,16 @@ class MscAdapter(CarrierAdapter):
                             "token": token,
                             "trackingMode": tracking_mode,
                             "reference": reference,
+                            "maxBytes": self.response_max_bytes,
                         },
                     )
                     response_status = int(response_payload.get("status", 0))
+                    if response_payload.get("responseTooLarge"):
+                        response_bytes = response_payload.get("responseBytes", "unknown")
+                        raise ValueError(
+                            f"MSC TrackingInfo response exceeds the {self.response_max_bytes}-byte limit "
+                            f"({response_bytes} bytes)"
+                        )
                     response_text = str(response_payload.get("text", ""))
                     response_url = str(response_payload.get("url", self.tracking_api_url))
                     if response_status >= 400:

@@ -26,6 +26,10 @@ from .models import (
 )
 
 
+class ClickUpWorkloadLimitError(RuntimeError):
+    """A ClickUp inventory exceeded the configured per-run safety budget."""
+
+
 class ClickUpClient:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -69,10 +73,30 @@ class ClickUpClient:
     def list_shipments(self) -> list[ShipmentRef]:
         target_lists = self._resolve_target_lists()
         total_lists = len(target_lists)
+        if total_lists > self.settings.clickup_max_lists_per_run:
+            raise ClickUpWorkloadLimitError(
+                "ClickUp target list discovery returned "
+                f"{total_lists} lists, exceeding CLICKUP_MAX_LISTS_PER_RUN="
+                f"{self.settings.clickup_max_lists_per_run}"
+            )
         print(f"Loading ClickUp tasks from {total_lists} list(s)...", file=sys.stderr)
 
         tasks: list[dict[str, Any]] = []
         seen_task_ids: set[str] = set()
+
+        def add_task_if_open(task: dict[str, Any]) -> None:
+            if not _is_open_task(task):
+                return
+            task_id = str(task.get("id") or "")
+            if not task_id or task_id in seen_task_ids:
+                return
+            if len(tasks) >= self.settings.clickup_max_total_tasks:
+                raise ClickUpWorkloadLimitError(
+                    "ClickUp shipment inventory exceeds CLICKUP_MAX_TOTAL_TASKS="
+                    f"{self.settings.clickup_max_total_tasks}"
+                )
+            tasks.append(task)
+            seen_task_ids.add(task_id)
 
         for idx, list_id in enumerate(target_lists.keys(), start=1):
             print(f"ClickUp list {idx}/{total_lists}: {list_id}", file=sys.stderr)
@@ -83,12 +107,7 @@ class ClickUpClient:
                 carrier_filter_value=carrier_filter_value,
             )
             for t in open_tasks:
-                if not _is_open_task(t):
-                    continue
-                tid = str(t.get("id"))
-                if tid and tid not in seen_task_ids:
-                    tasks.append(t)
-                    seen_task_ids.add(tid)
+                add_task_if_open(t)
 
             if self.settings.clickup_include_archived:
                 archived_tasks = self._fetch_tasks(
@@ -97,12 +116,7 @@ class ClickUpClient:
                     carrier_filter_value=carrier_filter_value,
                 )
                 for t in archived_tasks:
-                    if not _is_open_task(t):
-                        continue
-                    tid = str(t.get("id"))
-                    if tid and tid not in seen_task_ids:
-                        tasks.append(t)
-                        seen_task_ids.add(tid)
+                    add_task_if_open(t)
 
         shipments: list[ShipmentRef] = []
         for task in tasks:
@@ -455,6 +469,11 @@ class ClickUpClient:
         all_tasks: list[dict[str, Any]] = []
         page = 0
         while True:
+            if page >= self.settings.clickup_max_pages_per_list:
+                raise ClickUpWorkloadLimitError(
+                    f"ClickUp list {list_id} exceeds CLICKUP_MAX_PAGES_PER_LIST="
+                    f"{self.settings.clickup_max_pages_per_list}"
+                )
             params = dict(base_params)
             params["page"] = str(page)
             response = self._request("get", url, params=params, timeout=30)
@@ -463,6 +482,13 @@ class ClickUpClient:
             batch = payload.get("tasks", [])
             if not batch:
                 break
+            if not isinstance(batch, list):
+                raise ValueError(f"ClickUp list {list_id} returned a non-list tasks payload")
+            if len(all_tasks) + len(batch) > self.settings.clickup_max_tasks_per_list:
+                raise ClickUpWorkloadLimitError(
+                    f"ClickUp list {list_id} exceeds CLICKUP_MAX_TASKS_PER_LIST="
+                    f"{self.settings.clickup_max_tasks_per_list}"
+                )
             all_tasks.extend(batch)
             if payload.get("last_page") is True:
                 break

@@ -8,6 +8,7 @@ from shipment_sync.clickup_contacts_client import ClickUpContactsClient
 from shipment_sync.contact_config import ContactSyncSettings
 from shipment_sync.contacts_sync import run_contacts_sync
 from shipment_sync.icloud_carddav import iCloudCardDAVClient
+from shipment_sync.terminal import terminal_safe_text
 
 
 def main() -> None:
@@ -36,12 +37,16 @@ def main() -> None:
             return
         print(f"Found {len(fields)} custom fields:")
         for f in fields:
-            print(f"- list={f['list_id']} | id={f['id']} | name={f['name']} | type={f['type']}")
+            print(
+                terminal_safe_text(
+                    f"- list={f['list_id']} | id={f['id']} | name={f['name']} | type={f['type']}"
+                )
+            )
         return
 
     if args.discover_addressbook:
         icloud_client = iCloudCardDAVClient(settings)
-        print(icloud_client.ensure_addressbook_url())
+        print(terminal_safe_text(icloud_client.ensure_addressbook_url()))
         return
 
     icloud_client = iCloudCardDAVClient(settings) if not args.dry_run else None

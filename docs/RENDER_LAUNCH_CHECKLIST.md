@@ -55,7 +55,7 @@ MSC day-one settings:
 - `MSC_USE_PLAYWRIGHT=true`
 - `MSC_PLAYWRIGHT_REQUIRED=true`
 - `MSC_PLAYWRIGHT_BROWSER=chromium`
-- `MSC_PLAYWRIGHT_CHANNEL=chrome`
+- `MSC_PLAYWRIGHT_CHANNEL=` (use the pinned Playwright Chromium)
 - `MSC_PLAYWRIGHT_HEADLESS=true`
 - `MSC_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=20`
 - `MSC_PLAYWRIGHT_CHALLENGE_RELOAD_ATTEMPTS=1`
@@ -66,7 +66,7 @@ Hapag-Lloyd browser settings:
 - `HAPAG_USE_PLAYWRIGHT=true`
 - `HAPAG_PLAYWRIGHT_REQUIRED=false`
 - `HAPAG_PLAYWRIGHT_BROWSER=chromium`
-- `HAPAG_PLAYWRIGHT_CHANNEL=chrome`
+- `HAPAG_PLAYWRIGHT_CHANNEL=` (use the pinned Playwright Chromium)
 - `HAPAG_PLAYWRIGHT_HEADLESS=true`
 - `HAPAG_PLAYWRIGHT_VIEW=S8510`
 - `HAPAG_PLAYWRIGHT_CHALLENGE_TIMEOUT_SECONDS=45`
@@ -78,7 +78,7 @@ Wan Hai browser settings:
 - `WAN_HAI_USE_PLAYWRIGHT=true`
 - `WAN_HAI_PLAYWRIGHT_REQUIRED=false`
 - `WAN_HAI_PLAYWRIGHT_BROWSER=chromium`
-- `WAN_HAI_PLAYWRIGHT_CHANNEL=chrome`
+- `WAN_HAI_PLAYWRIGHT_CHANNEL=` (use the pinned Playwright Chromium)
 - `WAN_HAI_PLAYWRIGHT_HEADLESS=true`
 
 Other carrier settings:
@@ -101,10 +101,10 @@ Optional on cron:
 ## 5. ClickUp connection
 
 Immediate trigger URL:
-- `POST https://<shipment-api-domain>/webhooks/clickup/track-trace?token=<SHIPMENT_API_TRIGGER_TOKEN>`
+- `POST https://<shipment-api-domain>/webhooks/clickup/track-trace` with `Authorization: Bearer <SHIPMENT_API_TRIGGER_TOKEN>`
 
 Manual trigger URL:
-- `POST https://<shipment-api-domain>/track-trace/run?token=<SHIPMENT_API_TRIGGER_TOKEN>`
+- `POST https://<shipment-api-domain>/track-trace/run` with `Authorization: Bearer <SHIPMENT_API_TRIGGER_TOKEN>`
 
 Protected trigger alternatives:
 - `Authorization: Bearer <SHIPMENT_API_TRIGGER_TOKEN>`

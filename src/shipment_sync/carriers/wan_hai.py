@@ -14,7 +14,7 @@ from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import extract_container_numbers, parse_event_time, render_vessel_voyage
 from shipment_sync.carriers.generic_line import GenericLineAdapter
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
-from shipment_sync.playwright_runner import run_sync_playwright
+from shipment_sync.playwright_runner import configured_browser_channel, run_sync_playwright
 
 
 class WanHaiAntiBotBlocked(ValueError):
@@ -30,7 +30,7 @@ class WanHaiAdapter(CarrierAdapter):
         self.playwright_timeout_seconds = int(os.getenv("WAN_HAI_PLAYWRIGHT_TIMEOUT_SECONDS", "90"))
         self.playwright_request_delay_seconds = float(os.getenv("WAN_HAI_PLAYWRIGHT_REQUEST_DELAY_SECONDS", "8"))
         self.playwright_browser = os.getenv("WAN_HAI_PLAYWRIGHT_BROWSER", "chromium").strip() or "chromium"
-        self.playwright_channel = os.getenv("WAN_HAI_PLAYWRIGHT_CHANNEL", "chrome").strip()
+        self.playwright_channel = os.getenv("WAN_HAI_PLAYWRIGHT_CHANNEL", "").strip()
         self.playwright_locale = os.getenv("WAN_HAI_PLAYWRIGHT_LOCALE", "").strip()
         self.playwright_user_agent = os.getenv("WAN_HAI_PLAYWRIGHT_USER_AGENT", "").strip()
         self.tracking_page_url = (
@@ -105,8 +105,12 @@ class WanHaiAdapter(CarrierAdapter):
                     raise ValueError(f"Unsupported Playwright browser type: {self.playwright_browser}")
 
                 launch_kwargs: dict[str, Any] = {"headless": self.playwright_headless}
-                if self.playwright_channel and self.playwright_browser == "chromium":
-                    launch_kwargs["channel"] = self.playwright_channel
+                channel = configured_browser_channel(
+                    self.playwright_channel,
+                    browser_name=self.playwright_browser,
+                )
+                if channel:
+                    launch_kwargs["channel"] = channel
 
                 browser = browser_type.launch(**launch_kwargs)
                 try:

@@ -61,6 +61,16 @@ CUSTOMS_BROKER_PER_SHIPMENT_FIELDS = {
     "-cost- customs broker origin",
     "customs broker origin",
 }
+_MISSING_QUOTE_INDEX_ENTRY = object()
+
+
+class AmbiguousQuoteMatchError(ValueError):
+    """A mutable business key points to more than one quote task."""
+
+    def __init__(self, *, selector: str, value: str) -> None:
+        self.selector = selector
+        self.value = value
+        super().__init__(f"ambiguous quote match for {selector}={value}")
 
 
 def run_bulk_pricing_sync(
@@ -85,13 +95,33 @@ def run_bulk_pricing_sync(
     results: list[dict[str, Any]] = []
 
     for shipment_task in shipment_tasks:
-        quote_task, matched_on, matched_value = find_quote_for_shipment(
-            client,
-            settings,
-            shipment_task=shipment_task,
-            preloaded_quotes=quote_tasks,
-            quote_index=quotes_by_ref,
-        )
+        try:
+            quote_task, matched_on, matched_value = find_quote_for_shipment(
+                client,
+                settings,
+                shipment_task=shipment_task,
+                preloaded_quotes=quote_tasks,
+                quote_index=quotes_by_ref,
+            )
+        except AmbiguousQuoteMatchError as exc:
+            skipped += 1
+            results.append(
+                {
+                    "shipment_task_id": shipment_task.get("id"),
+                    "shipment_custom_id": shipment_task.get("custom_id"),
+                    "shipment_name": shipment_task.get("name"),
+                    "quote_task_id": None,
+                    "quote_custom_id": None,
+                    "quote_name": None,
+                    "dry_run": dry_run,
+                    "applied_updates": 0,
+                    "updates": [],
+                    "match_selector": exc.selector,
+                    "match_value": exc.value,
+                    "skip_reason": str(exc),
+                }
+            )
+            continue
         if quote_task is None:
             skipped += 1
             skip_reason = "no quote found"
@@ -144,14 +174,18 @@ def find_quote_for_shipment(
     *,
     shipment_task: dict[str, Any],
     preloaded_quotes: list[dict[str, Any]] | None = None,
-    quote_index: dict[str, tuple[dict[str, Any], str]] | None = None,
+    quote_index: dict[str, tuple[dict[str, Any], str] | None] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     linked_task_ids = _linked_task_ids(shipment_task)
-    if quote_index is not None and linked_task_ids:
+    if preloaded_quotes is not None and linked_task_ids:
+        quotes_by_task_id = {
+            str(task.get("id") or ""): task
+            for task in preloaded_quotes
+            if isinstance(task, dict) and str(task.get("id") or "")
+        }
         for related_task_id in linked_task_ids:
-            matched = quote_index.get(_normalize_match_key(related_task_id))
-            if matched is not None:
-                quote_task, _ = matched
+            quote_task = quotes_by_task_id.get(related_task_id)
+            if quote_task is not None:
                 return quote_task, "linked_task", related_task_id
 
     if preloaded_quotes is None and linked_task_ids:
@@ -171,12 +205,6 @@ def find_quote_for_shipment(
     quote_tasks = preloaded_quotes if preloaded_quotes is not None else client.list_tasks(settings.clickup_pricing_list_ids)
     indexed_quotes = quote_index if quote_index is not None else _index_quotes(quote_tasks, settings)
 
-    for related_task_id in linked_task_ids:
-        matched = indexed_quotes.get(_normalize_match_key(related_task_id))
-        if matched is not None:
-            quote_task, _ = matched
-            return quote_task, "linked_task", related_task_id
-
     candidates = _shipment_match_candidates(shipment_task, settings)
     if not candidates:
         return None, None, None
@@ -185,7 +213,12 @@ def find_quote_for_shipment(
         match_key = _normalize_match_key(candidate)
         if not match_key:
             continue
-        matched = indexed_quotes.get(match_key)
+        matched = _unique_index_match(
+            indexed_quotes,
+            key=match_key,
+            selector=selector,
+            candidate=candidate,
+        )
         if matched is not None:
             quote_task, _ = matched
             return quote_task, selector, candidate
@@ -297,14 +330,41 @@ def sync_pricing_pair(
     }
 
 
-def _index_quotes(tasks: list[dict[str, Any]], settings: PricingSyncSettings) -> dict[str, tuple[dict[str, Any], str]]:
-    out: dict[str, tuple[dict[str, Any], str]] = {}
+def _index_quotes(
+    tasks: list[dict[str, Any]],
+    settings: PricingSyncSettings,
+) -> dict[str, tuple[dict[str, Any], str] | None]:
+    out: dict[str, tuple[dict[str, Any], str] | None] = {}
     for task in tasks:
         for selector, candidate in _quote_match_candidates(task, settings):
             value = _normalize_match_key(candidate)
-            if value and value not in out:
+            if not value:
+                continue
+            existing = out.get(value, _MISSING_QUOTE_INDEX_ENTRY)
+            if existing is _MISSING_QUOTE_INDEX_ENTRY:
                 out[value] = (task, selector)
+                continue
+            if existing is None:
+                continue
+            existing_task, _ = existing
+            if str(existing_task.get("id") or "") != str(task.get("id") or ""):
+                out[value] = None
     return out
+
+
+def _unique_index_match(
+    quote_index: dict[str, tuple[dict[str, Any], str] | None],
+    *,
+    key: str,
+    selector: str,
+    candidate: str,
+) -> tuple[dict[str, Any], str] | None:
+    matched = quote_index.get(key, _MISSING_QUOTE_INDEX_ENTRY)
+    if matched is _MISSING_QUOTE_INDEX_ENTRY:
+        return None
+    if matched is None:
+        raise AmbiguousQuoteMatchError(selector=selector, value=candidate)
+    return matched
 
 
 def _quote_match_candidates(task: dict[str, Any], settings: PricingSyncSettings) -> list[tuple[str, str]]:

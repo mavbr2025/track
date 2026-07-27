@@ -8,6 +8,7 @@ import requests
 
 from .ap_config import AccountsPayableSettings
 from .clickup_ap_client import ClickUpAccountsPayableClient
+from .terminal import terminal_safe_text
 
 
 def main() -> None:
@@ -33,8 +34,10 @@ def main() -> None:
                 return
             for field in fields:
                 print(
-                    f"- list={field['list_id']} | id={field['id']} | "
-                    f"type={field['type'] or 'unknown'} | name={field['name'] or 'unnamed'}"
+                    terminal_safe_text(
+                        f"- list={field['list_id']} | id={field['id']} | "
+                        f"type={field['type'] or 'unknown'} | name={field['name'] or 'unnamed'}"
+                    )
                 )
             return
 
@@ -52,39 +55,41 @@ def main() -> None:
             amount_parts = [part for part in [invoice.currency, invoice.amount] if part]
             amount_text = " ".join(amount_parts) if amount_parts else invoice.amount or "n/a"
             print(
-                f"- [{list_label}] {invoice.task_name or invoice.task_id} | "
-                f"invoice={invoice.invoice_number or 'n/a'} | "
-                f"vendor={invoice.vendor or 'n/a'} | "
-                f"status={invoice.status or 'n/a'} | "
-                f"due={due_text} | "
-                f"amount={amount_text}"
+                terminal_safe_text(
+                    f"- [{list_label}] {invoice.task_name or invoice.task_id} | "
+                    f"invoice={invoice.invoice_number or 'n/a'} | "
+                    f"vendor={invoice.vendor or 'n/a'} | "
+                    f"status={invoice.status or 'n/a'} | "
+                    f"due={due_text} | "
+                    f"amount={amount_text}"
+                )
             )
             if invoice.task_url:
-                print(f"  url={invoice.task_url}")
+                print(terminal_safe_text(f"  url={invoice.task_url}"))
     except requests.HTTPError as exc:
         _print_http_error(exc)
         raise SystemExit(1) from exc
     except requests.RequestException as exc:
-        print(f"Network request failed: {exc}", file=sys.stderr)
+        print(terminal_safe_text(f"Network request failed: {exc}"), file=sys.stderr)
         raise SystemExit(1) from exc
     except ValueError as exc:
-        print(str(exc), file=sys.stderr)
+        print(terminal_safe_text(exc), file=sys.stderr)
         raise SystemExit(1) from exc
 
 
 def _print_http_error(exc: requests.HTTPError) -> None:
     response = exc.response
     if response is None:
-        print(f"HTTP request failed: {exc}", file=sys.stderr)
+        print(terminal_safe_text(f"HTTP request failed: {exc}"), file=sys.stderr)
         return
 
     url = response.url or "unknown URL"
     status_code = response.status_code
-    print(f"HTTP {status_code} while calling {url}", file=sys.stderr)
+    print(terminal_safe_text(f"HTTP {status_code} while calling {url}"), file=sys.stderr)
 
     snippet = (response.text or "").strip().replace("\n", " ")[:240]
     if snippet:
-        print(f"Response snippet: {snippet}", file=sys.stderr)
+        print(terminal_safe_text(f"Response snippet: {snippet}"), file=sys.stderr)
 
 
 if __name__ == "__main__":

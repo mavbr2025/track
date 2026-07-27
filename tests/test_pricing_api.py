@@ -48,6 +48,12 @@ def _settings() -> PricingSyncSettings:
     )
 
 
+@pytest.fixture
+def trigger_headers(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    monkeypatch.setenv("SHIPMENT_API_TRIGGER_TOKEN", "test-trigger-token")
+    return {"X-Trigger-Token": "test-trigger-token"}
+
+
 def test_pricing_health_reports_missing_credentials(monkeypatch) -> None:
     app = create_app()
     client = TestClient(app)
@@ -68,7 +74,7 @@ def test_pricing_health_reports_missing_credentials(monkeypatch) -> None:
     }
 
 
-def test_pricing_sync_pair_dry_run_returns_updates() -> None:
+def test_pricing_sync_pair_dry_run_returns_updates(trigger_headers: dict[str, str]) -> None:
     shipment_task = {
         "id": "shipment-task-1",
         "custom_id": "MTMLXGT-24095",
@@ -96,6 +102,7 @@ def test_pricing_sync_pair_dry_run_returns_updates() -> None:
 
     response = client.post(
         "/pricing/sync",
+        headers=trigger_headers,
         json={
             "shipment": "shipment-url",
             "quote": "quote-url",
@@ -118,7 +125,9 @@ def test_pricing_sync_pair_dry_run_returns_updates() -> None:
     assert fake_client.updated_fields == []
 
 
-def test_pricing_sync_can_discover_quote_from_shipment_relationship() -> None:
+def test_pricing_sync_can_discover_quote_from_shipment_relationship(
+    trigger_headers: dict[str, str],
+) -> None:
     shipment_task = {
         "id": "shipment-task-1",
         "custom_id": "MTMLXGT-25717",
@@ -160,6 +169,7 @@ def test_pricing_sync_can_discover_quote_from_shipment_relationship() -> None:
 
     response = client.post(
         "/pricing/sync",
+        headers=trigger_headers,
         json={
             "shipment": "shipment-url",
             "dry_run": True,
@@ -173,7 +183,7 @@ def test_pricing_sync_can_discover_quote_from_shipment_relationship() -> None:
     assert payload["results"][0]["match_value"] == "MTMLXGT-25717"
 
 
-def test_pricing_sync_bulk_reports_skipped_shipments() -> None:
+def test_pricing_sync_bulk_reports_skipped_shipments(trigger_headers: dict[str, str]) -> None:
     shipment_task = {
         "id": "shipment-task-1",
         "custom_id": "MTMLXGT-24095",
@@ -191,6 +201,7 @@ def test_pricing_sync_bulk_reports_skipped_shipments() -> None:
 
     response = client.post(
         "/pricing/sync",
+        headers=trigger_headers,
         json={
             "sync_linked_shipments": True,
             "dry_run": True,

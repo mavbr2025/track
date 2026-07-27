@@ -23,7 +23,12 @@ from shipment_sync.models import ShipmentRef
 from shipment_sync.one_booking_client import OneBookingClient
 from shipment_sync.one_booking_config import OneBookingConfigReport, OneBookingSettings
 from shipment_sync.one_booking_models import OneBookingResult
-from shipment_sync.pricing_sync import find_quote_for_shipment, run_bulk_pricing_sync, sync_pricing_pair
+from shipment_sync.pricing_sync import (
+    AmbiguousQuoteMatchError,
+    find_quote_for_shipment,
+    run_bulk_pricing_sync,
+    sync_pricing_pair,
+)
 from shipment_sync.pricing_sync_config import PricingSyncSettings
 from shipment_sync.track_trace_config import ApiTriggerSettings, TrackTraceConfigReport, inspect_track_trace_env
 from shipment_sync.sync import SyncStats, UpdatedShipment, run_sync
@@ -440,6 +445,8 @@ def create_app() -> FastAPI:
                 result["match_value"] = matched_value
         except requests.RequestException as exc:
             raise _service_error(exc) from exc
+        except AmbiguousQuoteMatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         return PricingSyncResponse(
             mode="pair",
@@ -574,9 +581,14 @@ def _require_operator_auth(
     settings = ApiTriggerSettings.from_env()
     expected = settings.trigger_token
     if not expected:
-        return
+        raise HTTPException(status_code=503, detail="SHIPMENT_API_TRIGGER_TOKEN is not configured")
 
-    provided = _extract_presented_token(authorization=authorization, x_trigger_token=x_trigger_token, query_token=token)
+    provided = _extract_presented_token(
+        authorization=authorization,
+        x_trigger_token=x_trigger_token,
+        query_token=token,
+        allow_query_token=settings.allow_query_token,
+    )
     if not provided:
         raise HTTPException(status_code=401, detail="Missing trigger authentication token")
     if not secrets.compare_digest(provided, expected):
@@ -741,6 +753,7 @@ def _extract_presented_token(
     authorization: str | None,
     x_trigger_token: str | None,
     query_token: str | None,
+    allow_query_token: bool = False,
 ) -> str | None:
     if authorization:
         scheme, _, token = authorization.partition(" ")
@@ -748,7 +761,7 @@ def _extract_presented_token(
             return token.strip()
     if x_trigger_token and x_trigger_token.strip():
         return x_trigger_token.strip()
-    if query_token and query_token.strip():
+    if allow_query_token and query_token and query_token.strip():
         return query_token.strip()
     return None
 
