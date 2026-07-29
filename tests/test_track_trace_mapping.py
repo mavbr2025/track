@@ -822,6 +822,72 @@ def test_plan_shipment_update_replaces_barge_with_latest_actual_mother_vessel() 
     assert updates["Vessel/Voyage"].value == "MSC MOTHER 123E"
 
 
+def test_plan_shipment_update_does_not_label_normal_one_ocean_leg_as_barge() -> None:
+    client = ClickUpClient(_settings(cf_vessel_voyage="vessel-voyage-field"))
+    shipment = ShipmentRef(
+        task_id="task-one-normal-ocean-leg",
+        task_name="ONE normal ocean leg",
+        shipping_line="one",
+        booking_no="TAOGC8049300",
+        container_no="ONEU2407096",
+        list_id="list-1",
+        current_task_status="Por arribar",
+        current_field_values={
+            "gtot-empty-field": _ms_days_from_now(-60),
+            "gtin-full-field": _ms_days_from_now(-55),
+            "eta-field": _ms_days_from_now(5),
+            "vessel-voyage-field": "BARGE",
+        },
+    )
+    status = ShipmentStatus(
+        status_text="In transit",
+        eta_time=_days_from_now(5),
+        vessel_voyage="NYK SILVIA 0440E",
+        recent_moves=[
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="QINGDAO, CN",
+                event_time=_days_from_now(-55),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="QINGDAO, CN",
+                event_time=_days_from_now(-54),
+                event_state="actual",
+                vessel_voyage="IQUIQUE EXPRESS 2623E",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="QINGDAO, CN",
+                event_time=_days_from_now(-53),
+                event_state="actual",
+                vessel_voyage="IQUIQUE EXPRESS 2623E",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="MANZANILLO, MX",
+                event_time=_days_from_now(-1),
+                event_state="actual",
+                vessel_voyage="NYK SILVIA 0440E",
+            ),
+            MovementEvent(
+                name="Transport Departed (DEPA)",
+                location="MANZANILLO, MX",
+                event_time=_days_from_now(0),
+                event_state="actual",
+                vessel_voyage="NYK SILVIA 0440E",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert plan.task_status_update is None
+    assert updates["Vessel/Voyage"].value == "NYK SILVIA 0440E"
+
+
 def test_plan_shipment_update_enriches_one_actual_voyage_with_matching_vessel_name() -> None:
     client = ClickUpClient(_settings(cf_vessel_voyage="vessel-voyage-field"))
     shipment = ShipmentRef(

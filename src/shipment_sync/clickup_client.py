@@ -1291,13 +1291,17 @@ def _effective_vessel_voyage(
     field_values: dict[str, Any],
     now_utc: datetime,
 ) -> str | None:
+    current_step = _workflow_step_for_status(
+        _workflow_status_by_step(settings, shipment),
+        shipment.current_task_status or "",
+    )
     if _has_origin_barge_transit_move(
         shipment=shipment,
         status=status,
         settings=settings,
         field_values=field_values,
         now_utc=now_utc,
-        current_step=None,
+        current_step=current_step,
     ):
         return "BARGE"
 
@@ -1369,7 +1373,9 @@ def _has_origin_barge_transit_move(
     now_utc: datetime,
     current_step: str | None,
 ) -> bool:
-    if current_step is not None and current_step not in {"booking_confirmed", "collected", "origin_port"}:
+    # BARGE is an origin-stage marker. An unknown or later workflow state must
+    # not overwrite a carrier-reported vessel with the feeder placeholder.
+    if current_step not in {"booking_confirmed", "collected", "origin_port"}:
         return False
 
     if not (shipment.shipping_line or "").strip():
@@ -1406,32 +1412,6 @@ def _has_origin_barge_transit_move(
         and _has_actual_intermediate_discharge(ordered_moves, barge_load)
     ):
         return True
-
-    # A gate-backed fallback still requires a later actual carrier movement;
-    # an estimated itinerary is not sufficient evidence of a feeder departure.
-    gate_out_empty_date = _field_date(settings.cf_gate_out_empty, field_values)
-    gate_in_full_date = _field_date(settings.cf_gate_in_full, field_values)
-    if gate_out_empty_date is None or gate_in_full_date is None:
-        return False
-
-    for idx, move in enumerate(ordered_moves):
-        code = _event_code_from_move(move)
-        if code not in {"LOAD", "DEPA", "ARRI", "DISC"}:
-            continue
-        move_date = _move_event_date(move)
-        if move_date is None or move_date < gate_in_full_date:
-            continue
-        if not _move_is_effectively_actual(move, now_utc=now_utc):
-            continue
-
-        later_departure = _next_departure_after(ordered_moves, idx)
-        later_departure_date = _move_event_date(later_departure)
-        if (
-            later_departure_date is not None
-            and later_departure_date > move_date
-            and _move_is_effectively_actual(later_departure, now_utc=now_utc)
-        ):
-            return True
 
     return False
 
@@ -1886,13 +1866,6 @@ def _move_event_date(move: MovementEvent | None) -> date | None:
     coerced = _coerce_display_date(move.event_time_local_text, move.event_time)
     if coerced is not None:
         return coerced.astimezone(timezone.utc).date()
-    return None
-
-
-def _next_departure_after(moves: list[MovementEvent], index: int) -> MovementEvent | None:
-    for move in moves[index + 1 :]:
-        if _event_code_from_move(move) == "DEPA":
-            return move
     return None
 
 
