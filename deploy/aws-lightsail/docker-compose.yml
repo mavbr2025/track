@@ -144,16 +144,16 @@ services:
       CLICKUP_SPACE_IDS: "90171126576,90171139728"
       CLICKUP_DISCOVER_LISTS_FROM_SPACES: "false"
       CLICKUP_DISCOVER_LISTS_FROM_TEAM: "false"
-      CMA_CGM_USE_PLAYWRIGHT: "true"
-      CMA_CGM_PLAYWRIGHT_REQUIRED: "true"
+      CMA_CGM_USE_PLAYWRIGHT: "false"
+      CMA_CGM_PLAYWRIGHT_REQUIRED: "false"
       CMA_CGM_PLAYWRIGHT_HEADLESS: "true"
       CMA_CGM_PLAYWRIGHT_TIMEOUT_SECONDS: "90"
       CMA_CGM_PLAYWRIGHT_WAIT_SECONDS: "8"
       CMA_CGM_TRACKING_URL_TEMPLATE: "https://www.cma-cgm.com/ebusiness/tracking/detail/{reference}"
       CMA_CGM_TRACKING_API_URL: ""
-      CMA_CGM_API_BASE_URL: ""
-      CMA_CGM_API_METHOD: ""
-      CMA_CGM_API_METHOD_PATH: ""
+      CMA_CGM_API_BASE_URL: "https://apis.cma-cgm.net/operation/trackandtrace/v1"
+      CMA_CGM_API_METHOD: "searchMoveOnCommercialCycle"
+      CMA_CGM_API_METHOD_PATH: "/events"
     volumes:
       - ../../data:/data/shipment-sync
     command: ./scripts/run_sync_loop.sh

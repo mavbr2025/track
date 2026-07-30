@@ -758,6 +758,11 @@ For CMA-CGM:
   - Auth headers:
     - `CMA_CGM_API_KEY=...`
     - `CMA_CGM_API_KEY_HEADER=keyId` (from CMA OpenAPI `ApiKeyAuth`)
+  - OAuth2 client credentials for the Track & Trace API:
+    - `CMA_CGM_OAUTH_TOKEN_URL=https://auth.cma-cgm.com/as/token.oauth2`
+    - `CMA_CGM_OAUTH_CLIENT_ID=...`
+    - `CMA_CGM_OAUTH_CLIENT_SECRET=...`
+    - `CMA_CGM_OAUTH_SCOPE=tandtcommercial:read:be`
   - Optional query keys:
     - DCSA defaults used by adapter:
       - `CMA_CGM_CONTAINER_REF_PARAM=equipmentReference`
@@ -768,7 +773,7 @@ For CMA-CGM:
   - `CMA_CGM_CONTAINER_TYPE_CODE=container`
   - `CMA_CGM_BOOKING_TYPE_CODE=booking`
 - Notes:
-  - DCSA endpoint in the provided spec is `GET /events` (`operationId: searchMoveOnCommercialCycle`).
+  - DCSA endpoint in the provided spec is `GET /events` (`operationId: searchMoveOnCommercialCycle`) and uses OAuth2 client credentials.
   - CMA-CGM may return anti-bot challenge pages (`Please enable JS and disable any ad blocker`).
   - Preflight behavior:
     - If CMA API env is configured, preflight checks the API host (not the public web tracking page).

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import re
 import time
@@ -11,6 +11,7 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    bounded_response_json,
     bounded_response_text,
     extract_container_numbers,
     extract_event_vessel_voyage,
@@ -68,6 +69,10 @@ class CmaCgmAdapter(CarrierAdapter):
         self.api_key = os.getenv("CMA_CGM_API_KEY", "").strip()
         # DCSA spec in CMA portal uses API key header "keyId".
         self.api_key_header = os.getenv("CMA_CGM_API_KEY_HEADER", "keyId").strip()
+        self.oauth_token_url = os.getenv("CMA_CGM_OAUTH_TOKEN_URL", "").strip()
+        self.oauth_client_id = os.getenv("CMA_CGM_OAUTH_CLIENT_ID", "").strip()
+        self.oauth_client_secret = os.getenv("CMA_CGM_OAUTH_CLIENT_SECRET", "").strip()
+        self.oauth_scope = os.getenv("CMA_CGM_OAUTH_SCOPE", "").strip()
         # DCSA /events filters use equipmentReference and carrierBookingReference.
         self.ref_param = os.getenv("CMA_CGM_REF_PARAM", "").strip()
         self.container_ref_param = os.getenv("CMA_CGM_CONTAINER_REF_PARAM", "equipmentReference").strip()
@@ -80,6 +85,8 @@ class CmaCgmAdapter(CarrierAdapter):
         self.max_retries = int(os.getenv("CMA_CGM_MAX_RETRIES", "2"))
         self.retry_delay_seconds = float(os.getenv("CMA_CGM_RETRY_DELAY_SECONDS", "2"))
         self.session = requests.Session()
+        self._oauth_access_token: str | None = None
+        self._oauth_expires_at: datetime | None = None
         self.session.headers.update(
             {
                 "Accept": "application/json, text/plain, */*",
@@ -98,6 +105,17 @@ class CmaCgmAdapter(CarrierAdapter):
             container_code=self.container_type_code,
         )
         source_url = _build_source_url(self.url_template, reference, ref_type)
+
+        # The CMA Track & Trace API is the authoritative, supported integration.
+        # Do not let a configured API path fall back to a browser challenge.
+        if self._api_mode_requested():
+            payload, source = self._fetch_payload(reference=reference, ref_type=ref_type)
+            return self._status_from_payload(
+                payload=payload,
+                source=source,
+                source_url=source_url,
+            )
+
         playwright_error: Exception | None = None
         if self.use_playwright:
             try:
@@ -108,6 +126,21 @@ class CmaCgmAdapter(CarrierAdapter):
                     raise
 
         payload, source = self._fetch_payload(reference=reference, ref_type=ref_type)
+        return self._status_from_payload(
+            payload=payload,
+            source=source,
+            source_url=source_url,
+            playwright_error=playwright_error,
+        )
+
+    def _status_from_payload(
+        self,
+        *,
+        payload: dict[str, Any],
+        source: str,
+        source_url: str,
+        playwright_error: Exception | None = None,
+    ) -> ShipmentStatus:
         discovered_containers = extract_container_numbers(payload)
         recent_moves = _extract_moves(payload)
         latest_move = recent_moves[0] if recent_moves else None
@@ -239,9 +272,9 @@ class CmaCgmAdapter(CarrierAdapter):
         return run_sync_playwright(_run)
 
     def _fetch_payload(self, *, reference: str, ref_type: str) -> tuple[dict[str, Any], str]:
-        headers = {self.api_key_header: self.api_key} if self.api_key else {}
+        headers = self._api_headers()
         api_url = self._resolve_api_url()
-        api_mode_requested = bool(self.api_method or self.api_method_path or self.api_base_url)
+        api_mode_requested = self._api_mode_requested()
 
         if api_url:
             request_url = self._format_reference_placeholders(api_url, reference=reference, ref_type=ref_type)
@@ -269,6 +302,78 @@ class CmaCgmAdapter(CarrierAdapter):
         response = self._request_with_retries(url, headers=headers)
         payload = self._parse_payload(response)
         return payload, f"cma-web:{url}"
+
+    def _api_mode_requested(self) -> bool:
+        return bool(self.api_url or self.api_base_url or self.api_method or self.api_method_path)
+
+    def _api_headers(self) -> dict[str, str]:
+        oauth_configured = any(
+            (
+                self.oauth_token_url,
+                self.oauth_client_id,
+                self.oauth_client_secret,
+                self.oauth_scope,
+            )
+        )
+        if not oauth_configured:
+            return {self.api_key_header: self.api_key} if self.api_key else {}
+
+        missing = [
+            name
+            for name, value in (
+                ("CMA_CGM_OAUTH_TOKEN_URL", self.oauth_token_url),
+                ("CMA_CGM_OAUTH_CLIENT_ID", self.oauth_client_id),
+                ("CMA_CGM_OAUTH_CLIENT_SECRET", self.oauth_client_secret),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"CMA-CGM OAuth configuration is incomplete: missing {', '.join(missing)}")
+
+        # Track & Trace is an OAuth-protected CMA API. Do not send a stale
+        # public-API keyId alongside a bearer token from a shared environment.
+        return {"Authorization": f"Bearer {self._get_oauth_access_token()}"}
+
+    def _get_oauth_access_token(self) -> str:
+        now = datetime.now(timezone.utc)
+        if self._oauth_access_token and self._oauth_expires_at and now < self._oauth_expires_at:
+            return self._oauth_access_token
+
+        data = {"grant_type": "client_credentials"}
+        if self.oauth_scope:
+            data["scope"] = self.oauth_scope
+
+        try:
+            response = self.session.post(
+                self.oauth_token_url,
+                auth=(self.oauth_client_id, self.oauth_client_secret),
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=self.timeout_seconds,
+                allow_redirects=False,
+                stream=True,
+            )
+            response.raise_for_status()
+            payload = bounded_response_json(response)
+        except requests.RequestException as exc:
+            raise ValueError(f"CMA-CGM OAuth token request failed: {exc}") from exc
+        except (TypeError, ValueError) as exc:
+            raise ValueError("CMA-CGM OAuth token response was not valid JSON") from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError("CMA-CGM OAuth token response was not an object")
+        token = payload.get("access_token")
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("CMA-CGM OAuth token response missing access_token")
+
+        try:
+            expires_in = int(payload.get("expires_in", 300))
+        except (TypeError, ValueError):
+            expires_in = 300
+        refresh_before_seconds = min(30, max(1, expires_in // 5))
+        self._oauth_access_token = token.strip()
+        self._oauth_expires_at = now + timedelta(seconds=max(1, expires_in - refresh_before_seconds))
+        return self._oauth_access_token
 
     def _resolve_api_url(self) -> str:
         if self.api_url:
