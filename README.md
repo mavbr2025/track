@@ -86,6 +86,10 @@ Trace only moves tasks forward through this sequence: `Pendiente de booking` ->
 `Por arribar` -> `arribado en puerto` -> `en ruta a almacén` / `en almacén` ->
 `Vacío devuelto`.
 
+The cross-carrier operating contract, terminal conditions, source ownership,
+and DCSA adoption rules are defined in
+[`docs/TRACK_TRACE_OPERATIONAL_POLICY.md`](docs/TRACK_TRACE_OPERATIONAL_POLICY.md).
+
 The default status labels can be overridden with:
 `CLICKUP_STATUS_PENDING_BOOKING`, `CLICKUP_STATUS_BOOKING_CONFIRMED`,
 `CLICKUP_STATUS_COLLECTED`, `CLICKUP_STATUS_ORIGIN_PORT`,
