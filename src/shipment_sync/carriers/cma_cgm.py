@@ -133,6 +133,29 @@ class CmaCgmAdapter(CarrierAdapter):
             playwright_error=playwright_error,
         )
 
+    def fetch_dcsa_events(self, shipment: ShipmentRef) -> tuple[list[dict[str, Any]], str]:
+        """Fetch CMA's official DCSA event payload without website fallback.
+
+        This is intentionally separate from ``fetch_status``. Shadow ingestion
+        must capture the carrier contract exactly as returned by the official
+        API and must never turn a browser-derived status into a DCSA event.
+        """
+
+        if not self._api_mode_requested():
+            raise ValueError(
+                "CMA DCSA shadow ingestion requires CMA_CGM_TRACKING_API_URL or CMA_CGM_API_BASE_URL."
+            )
+        reference, ref_type = _pick_reference(
+            shipment=shipment,
+            booking_code=self.booking_type_code,
+            container_code=self.container_type_code,
+        )
+        payload, source = self._fetch_payload(reference=reference, ref_type=ref_type)
+        if not source.startswith("cma-api:"):  # pragma: no cover - guarded by _api_mode_requested
+            raise RuntimeError("CMA DCSA shadow ingestion refused a non-API source.")
+        events = [event for event in _extract_event_list(payload) if isinstance(event, dict)]
+        return events, source.removeprefix("cma-api:")
+
     def _status_from_payload(
         self,
         *,

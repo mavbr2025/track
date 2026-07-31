@@ -90,6 +90,25 @@ The cross-carrier operating contract, terminal conditions, source ownership,
 and DCSA adoption rules are defined in
 [`docs/TRACK_TRACE_OPERATIONAL_POLICY.md`](docs/TRACK_TRACE_OPERATIONAL_POLICY.md).
 
+## DCSA shadow pilot
+
+`dcsa-tnt-shadow` is a separate, non-projecting ingestion lane for official
+carrier DCSA payloads. It reads the existing ClickUp shipment inventory, calls
+only official CMA CGM or Maersk event APIs, validates and redacts payloads, and
+records evidence in an explicit ledger. It never writes a ClickUp field,
+status, or comment.
+
+Run a local configuration check only:
+```bash
+dcsa-tnt-shadow
+```
+
+The `--run` form makes external reads and writes validated evidence to the
+configured ledger; it is not a replacement for `shipment-sync` and does not
+activate any normal carrier schedule. See
+[`docs/DCSA_SHADOW_PILOT.md`](docs/DCSA_SHADOW_PILOT.md) for required
+environment variables, production infrastructure, and the go/no-go gates.
+
 The default status labels can be overridden with:
 `CLICKUP_STATUS_PENDING_BOOKING`, `CLICKUP_STATUS_BOOKING_CONFIRMED`,
 `CLICKUP_STATUS_COLLECTED`, `CLICKUP_STATUS_ORIGIN_PORT`,

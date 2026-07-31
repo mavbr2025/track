@@ -115,12 +115,27 @@ The native task status and `Estatus DB/` must be reconciled after every workflow
 | Native terminal-status prefilter | Implemented | Retain and test for every carrier path. |
 | Forward-only primary workflow | Implemented | Keep as a hard invariant. |
 | Positive confirmation for all carriers | Partial | Replace non-ONE negative-pending fallback. |
-| Carrier `CANC` stops work | Not implemented for DCSA input | Add canonical event handling and terminal projection policy. |
-| `PENC` prevents confirmation | Not implemented for DCSA input | Add explicit mapping and test. |
+| Carrier `CANC` stops work | Shadow lane records it as `halted`; no ClickUp projection exists | Add the approved cancellation projection only after carrier payload review. |
+| `PENC` prevents confirmation | Shadow lane records it as `requires_review`; no ClickUp projection exists | Add the approved pending-booking projection only after carrier payload review. |
 | Manual field ownership | Not implemented | Add override metadata and reconciliation workflow. |
-| Durable event evidence and idempotency | Not implemented | Add canonical event ledger. |
+| Durable event evidence and idempotency | Implemented for the DCSA shadow lane | Retain DynamoDB evidence, conditional event identity, and non-projecting review gates. |
 | ClickUp readback and resumable status writes | Partial | Make workflow writes durable and verified. |
 
 ## 11. Approved pilot scope
 
 CMA and Maersk are the shadow-mode pilots, subject to endpoint and version validation. Existing carrier schedules remain unchanged. No ClickUp field, status, comment, or customer-facing output is written from the DCSA lane until real carrier events validate the policy.
+
+## 12. DCSA shadow implementation
+
+The `dcsa-tnt-shadow` command is an isolated ingestion lane. It reads ClickUp
+inventory, accepts only official API event payloads, validates the declared TNT
+contract, redacts sensitive payload values, and records evidence without a
+ClickUp write path. Its DynamoDB ledger is append-only from the worker's
+perspective: conditional puts, reads, indexed queries, and projection-state
+updates only. It has no delete or scan permission.
+
+The CMA CGM pilot is fixed to the carrier's published TNT 2.2 contract. The
+Maersk pilot requires an explicitly reviewed TNT version and `MAERSK_API_MODE`
+set to `events`; automatic mode and public-site fallback are rejected. The
+implementation and production acceptance gates are detailed in
+[`docs/DCSA_SHADOW_PILOT.md`](DCSA_SHADOW_PILOT.md).
