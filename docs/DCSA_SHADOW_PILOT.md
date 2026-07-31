@@ -64,7 +64,8 @@ conditional event-key insert for idempotency.
 The infrastructure template creates:
 
 - `track-trace-dcsa-events`, a pay-per-request DynamoDB table with point-in-time
-  recovery, server-side encryption, and carrier/task indexes;
+  recovery, server-side encryption, service-level deletion protection, and
+  carrier/task indexes;
 - `TrackTraceDcsaShadowTaskRole`, a dedicated role that can query, read, write,
   and update only that ledger; it has no ClickUp or scheduler permissions;
 - a dedicated CloudWatch log group with 30-day retention.

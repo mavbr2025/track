@@ -25,6 +25,7 @@ Resources:
     Properties:
       TableName: !Ref TableName
       BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
       AttributeDefinitions:
         - AttributeName: event_key
           AttributeType: S
