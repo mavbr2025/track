@@ -139,6 +139,7 @@ def test_shadow_runner_quarantines_an_invalid_batch_without_partial_evidence(tmp
     ).run([_shipment()])
 
     assert summary.validation_failures == 1
+    assert summary.validation_failure_reasons == {"unsupported-shipment-event-code": 1}
     assert ledger.list_events() == []
 
 

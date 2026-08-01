@@ -112,6 +112,20 @@ def test_tnt_22_accepts_legacy_document_reference_values_and_rejects_tnt_23_code
         parse_dcsa_tnt_event(_shipment_event("PENC"), carrier="cma cgm", tnt_version="2.2")
 
 
+def test_cma_tnt_22_accepts_only_its_documented_reference_extensions() -> None:
+    payload = _shipment_event("CONF")
+    payload["references"] = [
+        {"referenceType": "LOAD", "referenceValue": "LOAD-1"},
+        {"referenceType": "ERT", "referenceValue": "ERT-1"},
+    ]
+
+    event = parse_dcsa_tnt_event(payload, carrier="CMA CGM", tnt_version="2.2")
+
+    assert [item.reference_type for item in event.references] == ["LOAD", "ERT"]
+    with pytest.raises(DcsaTntValidationError, match="Unsupported referenceType"):
+        parse_dcsa_tnt_event(payload, carrier="maersk", tnt_version="2.2")
+
+
 def test_tnt_event_requires_exactly_one_matching_typed_code() -> None:
     payload = _shipment_event("CONF")
     payload["equipmentEventTypeCode"] = "LOAD"

@@ -43,6 +43,9 @@ _EVENT_CLASSIFIERS = frozenset({"ACT", "PLN", "EST"})
 _FACILITY_TYPES = frozenset({"BOCR", "CLOC", "COFS", "COYA", "OFFD", "DEPO", "INTE", "POTE", "RAMP"})
 _REFERENCE_TYPES_V22 = frozenset({"FF", "SI", "PO", "CR", "AAO", "EQ"})
 _REFERENCE_TYPES_V23 = _REFERENCE_TYPES_V22 | frozenset({"ECR", "CSI", "BPR", "BID"})
+# CMA's published TNT 2.2 contract explicitly documents these two carrier
+# extensions. They are accepted only for CMA, not as generic DCSA 2.2 values.
+_CMA_CGM_REFERENCE_TYPES_V22 = frozenset({"LOAD", "ERT"})
 _DOCUMENT_REFERENCE_TYPES_V22 = frozenset({"BKG", "TRD"})
 _DOCUMENT_REFERENCE_TYPES_V23 = _DOCUMENT_REFERENCE_TYPES_V22 | frozenset({"CBR", "SHI"})
 _LEGACY_DOCUMENT_REFERENCE_TYPES = {
@@ -198,7 +201,7 @@ def parse_dcsa_tnt_event(
         field="transportCallSequenceNumber",
     )
     vessel = _optional_mapping((transport_call or {}).get("vessel"), field="transportCall.vessel") or {}
-    references = _parse_references(event.get("references"), version=version)
+    references = _parse_references(event.get("references"), carrier=normalized_carrier, version=version)
     document_references = _parse_document_references(event.get("documentReferences"), version=version)
     reason = _optional_text(event.get("reason"), field="reason")
     if version == "2.3" and reason is not None and len(reason) > 250:
@@ -348,12 +351,12 @@ def _extract_location(event: Mapping[str, Any], *, transport_call: Mapping[str, 
     )
 
 
-def _parse_references(value: Any, *, version: str) -> tuple[DcsaReference, ...]:
+def _parse_references(value: Any, *, carrier: str, version: str) -> tuple[DcsaReference, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
         raise DcsaTntValidationError("references must be an array.")
-    allowed_types = _REFERENCE_TYPES_V23 if version == "2.3" else _REFERENCE_TYPES_V22
+    allowed_types = _allowed_reference_types(carrier=carrier, version=version)
     references: list[DcsaReference] = []
     for index, item in enumerate(value):
         reference = _as_mapping(item, field=f"references[{index}]")
@@ -367,6 +370,13 @@ def _parse_references(value: Any, *, version: str) -> tuple[DcsaReference, ...]:
             )
         )
     return tuple(references)
+
+
+def _allowed_reference_types(*, carrier: str, version: str) -> frozenset[str]:
+    allowed_types = _REFERENCE_TYPES_V23 if version == "2.3" else _REFERENCE_TYPES_V22
+    if version == "2.2" and carrier in {"cma cgm", "cma-cgm", "cma - cgm"}:
+        return allowed_types | _CMA_CGM_REFERENCE_TYPES_V22
+    return allowed_types
 
 
 def _parse_document_references(value: Any, *, version: str) -> tuple[DcsaDocumentReference, ...]:

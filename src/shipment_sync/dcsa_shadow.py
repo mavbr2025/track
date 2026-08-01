@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from typing import Any, Protocol
 import unicodedata
@@ -108,8 +108,9 @@ class DcsaShadowRunSummary:
     skipped_limit: int = 0
     source_failures: int = 0
     validation_failures: int = 0
+    validation_failure_reasons: dict[str, int] = field(default_factory=dict)
 
-    def as_dict(self) -> dict[str, int | str]:
+    def as_dict(self) -> dict[str, int | str | dict[str, int]]:
         return {
             "mode": "shadow",
             "candidates": self.candidates,
@@ -124,6 +125,7 @@ class DcsaShadowRunSummary:
             "skipped_limit": self.skipped_limit,
             "source_failures": self.source_failures,
             "validation_failures": self.validation_failures,
+            "validation_failure_reasons": dict(sorted(self.validation_failure_reasons.items())),
         }
 
 
@@ -182,8 +184,10 @@ class DcsaShadowRunner:
                     )
                     for event in raw_events
                 ]
-            except DcsaTntValidationError:
+            except DcsaTntValidationError as exc:
                 summary.validation_failures += 1
+                reason = _validation_failure_reason(exc)
+                summary.validation_failure_reasons[reason] = summary.validation_failure_reasons.get(reason, 0) + 1
                 continue
 
             for event in events:
@@ -260,3 +264,33 @@ def _bounded_positive_int(key: str, *, default: int, maximum: int) -> int:
     except ValueError:
         return default
     return max(1, min(value, maximum))
+
+
+def _validation_failure_reason(error: DcsaTntValidationError) -> str:
+    """Return a stable diagnostic category without echoing carrier payload values."""
+
+    message = str(error)
+    categories = (
+        ("Event must contain exactly one matching event code", "event-code-shape"),
+        ("Unsupported shipmentEventTypeCode", "unsupported-shipment-event-code"),
+        ("Unsupported transportEventTypeCode", "unsupported-transport-event-code"),
+        ("Unsupported equipmentEventTypeCode", "unsupported-equipment-event-code"),
+        ("Unsupported eventType", "unsupported-event-type"),
+        ("Unsupported eventClassifierCode", "unsupported-event-classifier"),
+        ("eventID must be a UUID", "invalid-event-id"),
+        ("eventCreatedDateTime", "invalid-event-created-time"),
+        ("eventDateTime", "invalid-event-time"),
+        ("Transport events require transportCall", "missing-transport-call"),
+        ("Equipment events require emptyIndicatorCode", "missing-empty-indicator"),
+        ("Equipment events require equipmentReference", "missing-equipment-reference"),
+        ("Shipment events require documentID", "missing-shipment-document"),
+        ("Unsupported referenceType", "unsupported-reference-type"),
+        ("Unsupported documentReferenceType", "unsupported-document-reference-type"),
+        ("references must be an array", "invalid-references-shape"),
+        ("documentReferences must be an array", "invalid-document-references-shape"),
+        ("facilityTypeCode", "invalid-facility-type"),
+    )
+    for prefix, category in categories:
+        if message.startswith(prefix):
+            return category
+    return "other-dcsa-validation-error"

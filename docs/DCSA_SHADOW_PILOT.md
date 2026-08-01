@@ -96,6 +96,15 @@ Before a scheduled shadow task is created, demonstrate all of the following:
 `PENC` remains `requires_review`; `CANC` remains `halted`. Neither condition
 activates a ClickUp change during this pilot.
 
+### CMA TNT 2.2 compatibility
+
+CMA's published TNT 2.2 contract documents `LOAD` and `ERT` as CMA reference
+extensions. The canonical parser admits them only when `carrier` is CMA CGM
+and the declared contract is TNT 2.2; other carrier/version combinations stay
+on the DCSA reference-code set. Shadow summaries aggregate validation failures
+into stable non-payload categories so an unsupported carrier extension can be
+diagnosed without logging event bodies.
+
 ## CMA ECS canary
 
 The CMA canary is an explicitly separate task family. It preserves the normal
