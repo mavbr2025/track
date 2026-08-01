@@ -95,3 +95,29 @@ Before a scheduled shadow task is created, demonstrate all of the following:
 
 `PENC` remains `requires_review`; `CANC` remains `halted`. Neither condition
 activates a ClickUp change during this pilot.
+
+## CMA ECS canary
+
+The CMA canary is an explicitly separate task family. It preserves the normal
+CMA worker's `X86_64` Fargate runtime and VPC network configuration but uses
+the DCSA-only task role and log group. It receives only the inventory and CMA
+OAuth secret bindings required by the shadow command; normal status/comment
+settings are not injected.
+
+Build and push an immutable `linux/amd64` image, then register the task by
+digest:
+
+```bash
+DCSA_CMA_SHADOW_IMAGE_URI=525753067477.dkr.ecr.us-east-2.amazonaws.com/track-trace@sha256:<digest> \
+scripts/register_dcsa_cma_shadow_task.sh
+```
+
+The task is fixed to CMA CGM TNT 2.2, `DCSA_TNT_SHADOW_MAX_SHIPMENTS=25`, and
+the DynamoDB ledger. Launch one canary only after task-definition readback:
+
+```bash
+scripts/run_dcsa_cma_shadow_canary.sh
+```
+
+Neither command creates an EventBridge Scheduler schedule. Scheduling remains
+disabled until the ledger and log evidence have been reviewed and accepted.
