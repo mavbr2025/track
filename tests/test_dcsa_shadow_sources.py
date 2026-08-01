@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from shipment_sync.carriers.cma_cgm import CmaCgmAdapter
+from shipment_sync.carriers.cma_cgm import CmaCgmAdapter, CmaCgmDcsaEventFetch
 from shipment_sync.carriers.maersk import MaerskAdapter
 from shipment_sync.models import ShipmentRef
 
@@ -23,11 +23,16 @@ def test_cma_shadow_source_uses_the_official_api_payload_only(monkeypatch: pytes
     adapter = CmaCgmAdapter()
     requested: list[tuple[str, str]] = []
 
-    def fake_fetch_payload(*, reference: str, ref_type: str) -> tuple[dict[str, object], str]:
-        requested.append((reference, ref_type))
-        return {"events": [{"eventID": "evt-1"}]}, "cma-api:https://api.example.test/events"
+    def fake_fetch_pages(shipment: ShipmentRef) -> CmaCgmDcsaEventFetch:
+        requested.append((shipment.container_no or "", "container"))
+        return CmaCgmDcsaEventFetch(
+            first_page_payload={"events": [{"eventID": "evt-1"}]},
+            events=({"eventID": "evt-1"},),
+            source_url="https://api.example.test/events",
+            page_count=1,
+        )
 
-    monkeypatch.setattr(adapter, "_fetch_payload", fake_fetch_payload)
+    monkeypatch.setattr(adapter, "_fetch_dcsa_event_pages", fake_fetch_pages)
 
     events, source_url = adapter.fetch_dcsa_events(_shipment(container_no="CMAU1234567"))
 

@@ -111,6 +111,58 @@ characters, used as opaque idempotency input, and recorded with the
 `carrier-event-id-not-uuid` conformance warning. Other carriers and versions
 remain UUID-strict.
 
+## CMA legacy-versus-DCSA comparison
+
+The comparison lane is a separate, one-off test of the current CMA API
+projection against the complete validated DCSA TNT 2.2 event stream. It does
+not use the public CMA website or Playwright.
+
+```bash
+# Configuration only; no network call.
+cma-cgm-dcsa-compare
+
+# Explicitly enabled, bounded read-only comparison.
+CMA_CGM_COMPARISON_ENABLED=true \
+CMA_CGM_COMPARISON_MAX_SHIPMENTS=25 \
+cma-cgm-dcsa-compare --run
+```
+
+For every selected non-terminal CMA shipment, the lane makes one official API
+cursor traversal. The existing adapter's legacy interpretation is generated
+from the first response page, while the DCSA interpretation validates every
+page linked by CMA's `Next-Page` cursor header. The result reports only counts,
+event codes/timestamps, ETA, vessel/voyage, and named differences; it does not
+log raw payloads, container identifiers, credentials, or ClickUp values.
+
+`CMA_CGM_DCSA_MAX_PAGES` defaults to 25 and is capped at 250. If CMA supplies
+another page after the limit, the comparison fails that shipment rather than
+claiming complete coverage. Cursor links are restricted to the configured CMA
+API origin, and repeated pages fail closed.
+
+The command has no ClickUp field/status/comment write path, no ledger-write
+path, and no scheduler creation/update path. It is not a replacement for the
+normal CMA worker and must remain unscheduled until its comparison evidence is
+reviewed.
+
+### CMA comparison ECS canary
+
+The ECS comparison task is separate from both the normal CMA worker and the
+DCSA event-ledger canary. It reuses only the existing isolated task role and
+log group, writes no DynamoDB record, and is never scheduled by its helper
+scripts.
+
+```bash
+CMA_CGM_COMPARISON_IMAGE_URI=525753067477.dkr.ecr.us-east-2.amazonaws.com/track-trace@sha256:<digest> \
+scripts/register_cma_cgm_comparison_task.sh
+
+scripts/run_cma_cgm_comparison_canary.sh
+```
+
+Use `--dry-run` on either helper to inspect its task/network configuration
+without registering or starting anything. The runtime is constrained to the
+existing CMA worker's Fargate network configuration and an immutable
+Linux/amd64 image.
+
 ## CMA ECS canary
 
 The CMA canary is an explicitly separate task family. It preserves the normal

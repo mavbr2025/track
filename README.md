@@ -792,6 +792,14 @@ For CMA-CGM:
       - `CMA_CGM_BOOKING_REF_PARAM=carrierBookingReference`
     - optional generic keys: `CMA_CGM_REF_PARAM`, `CMA_CGM_TYPE_PARAM`
     - `CMA_CGM_INCLUDE_TYPE_PARAM=true|false`
+  - DCSA cursor safety:
+    - `CMA_CGM_DCSA_MAX_PAGES=25` bounds official `Next-Page` traversal.
+  - Read-only legacy-versus-DCSA comparison:
+    - `CMA_CGM_COMPARISON_ENABLED=true`
+    - `CMA_CGM_COMPARISON_MAX_SHIPMENTS=25`
+    - Run `cma-cgm-dcsa-compare --run`; it reads inventory and CMA's official
+      API but never writes ClickUp, creates a schedule, or replaces the normal
+      CMA worker.
 - Type codes:
   - `CMA_CGM_CONTAINER_TYPE_CODE=container`
   - `CMA_CGM_BOOKING_TYPE_CODE=booking`
