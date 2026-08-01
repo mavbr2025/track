@@ -797,6 +797,8 @@ For CMA-CGM:
   - Read-only legacy-versus-DCSA comparison:
     - `CMA_CGM_COMPARISON_ENABLED=true`
     - `CMA_CGM_COMPARISON_MAX_SHIPMENTS=25`
+    - `SHIPMENT_ALLOWED_LINES=cma cgm` is required and enforced as a strict
+      API-side ClickUp carrier prefilter.
     - Run `cma-cgm-dcsa-compare --run`; it reads inventory and CMA's official
       API but never writes ClickUp, creates a schedule, or replaces the normal
       CMA worker.

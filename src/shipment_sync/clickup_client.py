@@ -70,7 +70,7 @@ class ClickUpClient:
         assert last_error is not None
         raise last_error
 
-    def list_shipments(self) -> list[ShipmentRef]:
+    def list_shipments(self, *, require_carrier_prefilter: bool = False) -> list[ShipmentRef]:
         target_lists = self._resolve_target_lists()
         total_lists = len(target_lists)
         if total_lists > self.settings.clickup_max_lists_per_run:
@@ -101,10 +101,16 @@ class ClickUpClient:
         for idx, list_id in enumerate(target_lists.keys(), start=1):
             print(f"ClickUp list {idx}/{total_lists}: {list_id}", file=sys.stderr)
             carrier_filter_value = self._shipping_line_filter_value_for_list(list_id)
+            if require_carrier_prefilter and carrier_filter_value is None:
+                raise ClickUpWorkloadLimitError(
+                    "ClickUp carrier prefilter is required for this run but could not be established "
+                    f"for list {list_id}."
+                )
             open_tasks = self._fetch_tasks(
                 list_id=list_id,
                 archived=False,
                 carrier_filter_value=carrier_filter_value,
+                require_carrier_prefilter=require_carrier_prefilter,
             )
             for t in open_tasks:
                 add_task_if_open(t)
@@ -114,6 +120,7 @@ class ClickUpClient:
                     list_id=list_id,
                     archived=True,
                     carrier_filter_value=carrier_filter_value,
+                    require_carrier_prefilter=require_carrier_prefilter,
                 )
                 for t in archived_tasks:
                     add_task_if_open(t)
@@ -420,6 +427,7 @@ class ClickUpClient:
         list_id: str,
         archived: bool,
         carrier_filter_value: str | int | None = None,
+        require_carrier_prefilter: bool = False,
     ) -> list[dict[str, Any]]:
         try:
             return self._fetch_tasks_page_loop(
@@ -428,7 +436,7 @@ class ClickUpClient:
                 carrier_filter_value=carrier_filter_value,
             )
         except requests.RequestException as exc:
-            if carrier_filter_value is None:
+            if carrier_filter_value is None or require_carrier_prefilter:
                 raise
             if list_id not in self._carrier_filter_warning_lists:
                 print(

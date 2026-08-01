@@ -124,6 +124,7 @@ cma-cgm-dcsa-compare
 # Explicitly enabled, bounded read-only comparison.
 CMA_CGM_COMPARISON_ENABLED=true \
 CMA_CGM_COMPARISON_MAX_SHIPMENTS=25 \
+SHIPMENT_ALLOWED_LINES='cma cgm' \
 cma-cgm-dcsa-compare --run
 ```
 
@@ -132,7 +133,8 @@ cursor traversal. The existing adapter's legacy interpretation is generated
 from the first response page, while the DCSA interpretation validates every
 page linked by CMA's `Next-Page` cursor header. The result reports only counts,
 event codes/timestamps, ETA, vessel/voyage, and named differences; it does not
-log raw payloads, container identifiers, credentials, or ClickUp values.
+log raw payloads, container identifiers, credentials, or raw ClickUp field
+values.
 
 `CMA_CGM_DCSA_MAX_PAGES` defaults to 25 and is capped at 250. If CMA supplies
 another page after the limit, the comparison fails that shipment rather than
@@ -142,7 +144,9 @@ API origin, and repeated pages fail closed.
 The command has no ClickUp field/status/comment write path, no ledger-write
 path, and no scheduler creation/update path. It is not a replacement for the
 normal CMA worker and must remain unscheduled until its comparison evidence is
-reviewed.
+reviewed. It requires the exact single-carrier scope
+`SHIPMENT_ALLOWED_LINES=cma cgm`; if ClickUp cannot apply that carrier filter,
+the comparison fails closed rather than loading the entire shipment inventory.
 
 ### CMA comparison ECS canary
 

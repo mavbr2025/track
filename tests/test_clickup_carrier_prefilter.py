@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 import requests
 
-from shipment_sync.clickup_client import ClickUpClient
+from shipment_sync.clickup_client import ClickUpClient, ClickUpWorkloadLimitError
 from shipment_sync.config import Settings
 
 
@@ -244,6 +244,31 @@ def test_list_shipments_falls_back_when_clickup_rejects_prefilter() -> None:
     assert "custom_fields" in task_calls[0][1]
     assert task_calls[1][1] is not None
     assert "custom_fields" not in task_calls[1][1]
+
+
+def test_list_shipments_strict_prefilter_never_falls_back_to_all_tasks() -> None:
+    client = ClickUpClient(_settings(shipment_allowed_lines=["one"]))
+    fake_session = _FakeSession(
+        task_responses=[
+            _FakeResponse({}, error=requests.HTTPError("500 Server Error")),
+        ]
+    )
+    client.session = fake_session  # type: ignore[assignment]
+
+    with pytest.raises(requests.HTTPError, match="500 Server Error"):
+        client.list_shipments(require_carrier_prefilter=True)
+
+    task_calls = [call for call in fake_session.calls if call[0].endswith("/task")]
+    assert len(task_calls) == 1
+    assert task_calls[0][1] is not None
+    assert "custom_fields" in task_calls[0][1]
+
+
+def test_list_shipments_strict_prefilter_rejects_ambiguous_carrier_scope() -> None:
+    client = ClickUpClient(_settings(shipment_allowed_lines=["one", "msc"]))
+
+    with pytest.raises(ClickUpWorkloadLimitError, match="carrier prefilter is required"):
+        client.list_shipments(require_carrier_prefilter=True)
 
 
 def test_list_shipments_retries_transient_clickup_network_errors(monkeypatch: pytest.MonkeyPatch) -> None:

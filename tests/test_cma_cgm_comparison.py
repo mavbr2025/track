@@ -42,9 +42,11 @@ class _InventoryClient:
     def __init__(self, shipments: list[ShipmentRef]) -> None:
         self.shipments = shipments
         self.list_calls = 0
+        self.require_carrier_prefilter = False
 
-    def list_shipments(self) -> list[ShipmentRef]:
+    def list_shipments(self, *, require_carrier_prefilter: bool = False) -> list[ShipmentRef]:
         self.list_calls += 1
+        self.require_carrier_prefilter = require_carrier_prefilter
         return self.shipments
 
 
@@ -98,8 +100,15 @@ def _configure_api(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CMA_CGM_DCSA_MAX_PAGES", "3")
 
 
-def _settings(*, terminal_statuses: tuple[str, ...] = ()) -> SimpleNamespace:
-    return SimpleNamespace(shipment_terminal_statuses=terminal_statuses)
+def _settings(
+    *,
+    terminal_statuses: tuple[str, ...] = (),
+    shipment_allowed_lines: list[str] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        shipment_terminal_statuses=terminal_statuses,
+        shipment_allowed_lines=shipment_allowed_lines if shipment_allowed_lines is not None else ["cma cgm"],
+    )
 
 
 def test_cma_dcsa_fetch_follows_documented_cursor_without_changing_reference(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,6 +199,7 @@ def test_cma_comparison_reads_inventory_only_and_skips_terminal_shipments(monkey
     )
 
     assert inventory.list_calls == 1
+    assert inventory.require_carrier_prefilter is True
     assert summary.selected_shipments == 0
     assert summary.skipped_terminal == 1
     assert summary.source_failures == 0
@@ -200,3 +210,16 @@ def test_cma_comparison_settings_require_explicit_opt_in(monkeypatch: pytest.Mon
 
     with pytest.raises(ValueError, match="CMA comparison is disabled"):
         CmaCgmComparisonSettings.from_env(require_enabled=True)
+
+
+def test_cma_comparison_requires_an_exact_single_carrier_inventory_scope() -> None:
+    inventory = _InventoryClient([])
+
+    with pytest.raises(ValueError, match="SHIPMENT_ALLOWED_LINES=cma cgm"):
+        run_cma_cgm_comparison_from_clickup(
+            settings=_settings(shipment_allowed_lines=["cma cgm", "maersk"]),  # type: ignore[arg-type]
+            comparison_settings=CmaCgmComparisonSettings(enabled=True, max_shipments=5),
+            client=inventory,  # type: ignore[arg-type]
+        )
+
+    assert inventory.list_calls == 0

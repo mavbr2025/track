@@ -143,6 +143,7 @@ jq -e \
                     {name: "CLICKUP_USE_TASK_STATUS", value: "false"},
                     {name: "CMA_CGM_COMPARISON_ENABLED", value: "true"},
                     {name: "CMA_CGM_COMPARISON_MAX_SHIPMENTS", value: $max_shipments},
+                    {name: "SHIPMENT_ALLOWED_LINES", value: "cma cgm"},
                     {name: "SHIPMENT_AUDIT_SOURCE", value: "aws-ecs-cma-cgm-comparison"},
                     {name: "SHIPMENT_COMMENT_ON_NO_CHANGE", value: "false"}
                   ]
@@ -197,7 +198,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
             environmentNames: [(.environment // [])[].name],
             comparisonSettings: [
               (.environment // [])[]
-              | select(.name | test("^(AWS_REGION|CLICKUP_USE_TASK_STATUS|CMA_CGM_COMPARISON_|SHIPMENT_AUDIT_SOURCE|SHIPMENT_COMMENT_ON_NO_CHANGE)"))
+              | select(.name | test("^(AWS_REGION|CLICKUP_USE_TASK_STATUS|CMA_CGM_COMPARISON_|SHIPMENT_ALLOWED_LINES|SHIPMENT_AUDIT_SOURCE|SHIPMENT_COMMENT_ON_NO_CHANGE)"))
               | {name, value}
             ],
             secretNames: [(.secrets // [])[].name],

@@ -217,8 +217,9 @@ def run_cma_cgm_comparison_from_clickup(
 ) -> CmaCgmComparisonSummary:
     """Read shipment inventory only, then run the bounded CMA comparison."""
 
+    _require_cma_prefilter_scope(settings)
     inventory_client = client or ClickUpClient(settings)
-    shipments = inventory_client.list_shipments()
+    shipments = inventory_client.list_shipments(require_carrier_prefilter=True)
     return CmaCgmComparisonRunner(
         settings=settings,
         comparison_settings=comparison_settings,
@@ -371,7 +372,7 @@ def _same_text(left: str | None, right: str | None) -> bool:
 def _normalize_text(value: str | None) -> str:
     if not value:
         return ""
-    return " ".join(value.casefold().split())
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -381,6 +382,14 @@ def _iso(value: datetime | None) -> str | None:
 def _is_cma_cgm(value: str | None) -> bool:
     normalized = " ".join((value or "").strip().lower().split())
     return normalized in _CMA_CGM_ALIASES
+
+
+def _require_cma_prefilter_scope(settings: Settings) -> None:
+    allowed_lines = settings.shipment_allowed_lines or []
+    if len(allowed_lines) != 1 or not _is_cma_cgm(allowed_lines[0]):
+        raise ValueError(
+            "CMA comparison requires SHIPMENT_ALLOWED_LINES=cma cgm so ClickUp can apply a strict API-side filter."
+        )
 
 
 def _is_terminal(shipment: ShipmentRef, terminal_statuses: tuple[str, ...]) -> bool:
