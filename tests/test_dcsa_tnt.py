@@ -126,6 +126,19 @@ def test_cma_tnt_22_accepts_only_its_documented_reference_extensions() -> None:
         parse_dcsa_tnt_event(payload, carrier="maersk", tnt_version="2.2")
 
 
+def test_cma_tnt_22_preserves_non_uuid_event_ids_as_a_conformance_warning() -> None:
+    payload = _shipment_event("CONF")
+    payload["eventID"] = "CMA-OPAQUE-EVENT-1"
+
+    event = parse_dcsa_tnt_event(payload, carrier="CMA CGM", tnt_version="2.2")
+
+    assert event.event_id == "CMA-OPAQUE-EVENT-1"
+    assert event.conformance_warnings == ("carrier-event-id-not-uuid",)
+    assert event.normalized_record()["conformance_warnings"] == ["carrier-event-id-not-uuid"]
+    with pytest.raises(DcsaTntValidationError, match="eventID must be a UUID"):
+        parse_dcsa_tnt_event(payload, carrier="maersk", tnt_version="2.2")
+
+
 def test_tnt_event_requires_exactly_one_matching_typed_code() -> None:
     payload = _shipment_event("CONF")
     payload["equipmentEventTypeCode"] = "LOAD"

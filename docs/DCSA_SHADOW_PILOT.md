@@ -105,6 +105,12 @@ on the DCSA reference-code set. Shadow summaries aggregate validation failures
 into stable non-payload categories so an unsupported carrier extension can be
 diagnosed without logging event bodies.
 
+The live CMA endpoint also emits opaque, non-UUID `eventID` values despite the
+published UUID format. Those are accepted only for CMA TNT 2.2, bounded to 256
+characters, used as opaque idempotency input, and recorded with the
+`carrier-event-id-not-uuid` conformance warning. Other carriers and versions
+remain UUID-strict.
+
 ## CMA ECS canary
 
 The CMA canary is an explicitly separate task family. It preserves the normal

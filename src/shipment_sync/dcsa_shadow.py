@@ -109,6 +109,8 @@ class DcsaShadowRunSummary:
     source_failures: int = 0
     validation_failures: int = 0
     validation_failure_reasons: dict[str, int] = field(default_factory=dict)
+    conformance_warning_events: int = 0
+    conformance_warning_codes: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, int | str | dict[str, int]]:
         return {
@@ -126,6 +128,8 @@ class DcsaShadowRunSummary:
             "source_failures": self.source_failures,
             "validation_failures": self.validation_failures,
             "validation_failure_reasons": dict(sorted(self.validation_failure_reasons.items())),
+            "conformance_warning_events": self.conformance_warning_events,
+            "conformance_warning_codes": dict(sorted(self.conformance_warning_codes.items())),
         }
 
 
@@ -191,6 +195,12 @@ class DcsaShadowRunner:
                 continue
 
             for event in events:
+                if event.conformance_warnings:
+                    summary.conformance_warning_events += 1
+                    for warning in event.conformance_warnings:
+                        summary.conformance_warning_codes[warning] = (
+                            summary.conformance_warning_codes.get(warning, 0) + 1
+                        )
                 write = self.ledger.record(event, task_id=shipment.task_id)
                 if write.created:
                     summary.recorded_events += 1

@@ -46,6 +46,7 @@ _REFERENCE_TYPES_V23 = _REFERENCE_TYPES_V22 | frozenset({"ECR", "CSI", "BPR", "B
 # CMA's published TNT 2.2 contract explicitly documents these two carrier
 # extensions. They are accepted only for CMA, not as generic DCSA 2.2 values.
 _CMA_CGM_REFERENCE_TYPES_V22 = frozenset({"LOAD", "ERT"})
+_CMA_CGM_CARRIER_ALIASES = frozenset({"cma cgm", "cma-cgm", "cma - cgm"})
 _DOCUMENT_REFERENCE_TYPES_V22 = frozenset({"BKG", "TRD"})
 _DOCUMENT_REFERENCE_TYPES_V23 = _DOCUMENT_REFERENCE_TYPES_V22 | frozenset({"CBR", "SHI"})
 _LEGACY_DOCUMENT_REFERENCE_TYPES = {
@@ -87,6 +88,7 @@ class DcsaTntEvent:
     event_code: str
     event_classifier_code: str | None
     event_id: str | None
+    conformance_warnings: tuple[str, ...]
     idempotency_key: str
     event_created_at: datetime
     event_at: datetime | None
@@ -129,6 +131,7 @@ class DcsaTntEvent:
             "event_code": self.event_code,
             "event_classifier_code": self.event_classifier_code,
             "event_id": self.event_id,
+            "conformance_warnings": list(self.conformance_warnings),
             "idempotency_key": self.idempotency_key,
             "event_created_at": self.event_created_at.isoformat(),
             "event_at": self.event_at.isoformat() if self.event_at else None,
@@ -173,7 +176,11 @@ def parse_dcsa_tnt_event(
     event_code = _extract_event_code(event, event_type=event_type, version=version)
     event_created_at = _parse_datetime(event.get("eventCreatedDateTime"), field="eventCreatedDateTime")
     event_at = _optional_datetime(event.get("eventDateTime"), field="eventDateTime")
-    event_id = _optional_event_id(event.get("eventID"))
+    event_id, event_id_warning = _optional_event_id(
+        value=event.get("eventID"),
+        carrier=normalized_carrier,
+        version=version,
+    )
     event_classifier_code = _optional_code(event.get("eventClassifierCode"), field="eventClassifierCode")
     _validate_event_classifier(event_type, version, event_classifier_code)
 
@@ -221,6 +228,7 @@ def parse_dcsa_tnt_event(
         event_code=event_code,
         event_classifier_code=event_classifier_code,
         event_id=event_id,
+        conformance_warnings=tuple(warning for warning in (event_id_warning,) if warning),
         idempotency_key=idempotency_key,
         event_created_at=event_created_at,
         event_at=event_at,
@@ -374,7 +382,7 @@ def _parse_references(value: Any, *, carrier: str, version: str) -> tuple[DcsaRe
 
 def _allowed_reference_types(*, carrier: str, version: str) -> frozenset[str]:
     allowed_types = _REFERENCE_TYPES_V23 if version == "2.3" else _REFERENCE_TYPES_V22
-    if version == "2.2" and carrier in {"cma cgm", "cma-cgm", "cma - cgm"}:
+    if version == "2.2" and carrier in _CMA_CGM_CARRIER_ALIASES:
         return allowed_types | _CMA_CGM_REFERENCE_TYPES_V22
     return allowed_types
 
@@ -448,13 +456,17 @@ def _optional_code(value: Any, *, field: str) -> str | None:
     return text.upper() if text else None
 
 
-def _optional_event_id(value: Any) -> str | None:
+def _optional_event_id(*, value: Any, carrier: str, version: str) -> tuple[str | None, str | None]:
     event_id = _optional_text(value, field="eventID")
     if event_id is None:
-        return None
+        return None, None
+    if len(event_id) > 256:
+        raise DcsaTntValidationError("eventID must be at most 256 characters when supplied.")
     try:
-        return str(UUID(event_id))
+        return str(UUID(event_id)), None
     except ValueError as exc:
+        if version == "2.2" and carrier in _CMA_CGM_CARRIER_ALIASES:
+            return event_id, "carrier-event-id-not-uuid"
         raise DcsaTntValidationError("eventID must be a UUID when supplied.") from exc
 
 

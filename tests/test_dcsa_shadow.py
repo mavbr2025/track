@@ -46,11 +46,16 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**base)
 
 
-def _shipment(*, task_id: str = "task-1", status: str | None = None) -> ShipmentRef:
+def _shipment(
+    *,
+    task_id: str = "task-1",
+    status: str | None = None,
+    shipping_line: str = "Maersk",
+) -> ShipmentRef:
     return ShipmentRef(
         task_id=task_id,
         task_name="Shadow fixture",
-        shipping_line="Maersk",
+        shipping_line=shipping_line,
         booking_no="BOOK-1",
         container_no=None,
         list_id="list-1",
@@ -141,6 +146,22 @@ def test_shadow_runner_quarantines_an_invalid_batch_without_partial_evidence(tmp
     assert summary.validation_failures == 1
     assert summary.validation_failure_reasons == {"unsupported-shipment-event-code": 1}
     assert ledger.list_events() == []
+
+
+def test_shadow_runner_records_cma_conformance_warnings_without_projection(tmp_path) -> None:
+    event = _event("CONF")
+    event["eventID"] = "CMA-OPAQUE-EVENT-1"
+    source = _Source(events=[event], carrier="cma cgm")
+    summary = DcsaShadowRunner(
+        settings=_settings(),
+        shadow_settings=DcsaShadowSettings(enabled=True, max_shipments=10, carrier_versions={"cma cgm": "2.2"}),
+        ledger=DcsaEventLedger(str(tmp_path / "events.sqlite3")),
+        sources={"cma cgm": source},
+    ).run([_shipment(shipping_line="CMA CGM")])
+
+    assert summary.recorded_events == 1
+    assert summary.conformance_warning_events == 1
+    assert summary.conformance_warning_codes == {"carrier-event-id-not-uuid": 1}
 
 
 def test_shadow_configuration_requires_explicit_maersk_contract_version(monkeypatch: pytest.MonkeyPatch) -> None:
