@@ -422,6 +422,14 @@ def _extract_eta_from_search_item(item: dict[str, Any]) -> tuple[datetime | None
     pod_name = _safe_text(pod.get("locationName"))
 
     if isinstance(cargo_events, list):
+        # A completed final-port vessel arrival is the authoritative arrival
+        # date. ONE can retain stale estimated downstream events (for example,
+        # delivery gate-out) after the vessel has arrived, so those must not
+        # overwrite the actual arrival.
+        eta, eta_raw = _extract_actual_pod_arrival(cargo_events, pod_name=pod_name)
+        if eta is not None:
+            return eta, eta_raw
+
         # Known ETA-related ONE matrix IDs observed in track-and-trace payloads.
         eta, eta_raw = _extract_eta_from_cargo_events(cargo_events, {"E089", "E105", "E078"})
         if eta is not None:
@@ -433,6 +441,40 @@ def _extract_eta_from_search_item(item: dict[str, Any]) -> tuple[datetime | None
             return eta, eta_raw
 
     return None, None
+
+
+def _extract_actual_pod_arrival(
+    cargo_events: list[Any],
+    *,
+    pod_name: str | None,
+) -> tuple[datetime | None, str | None]:
+    """Return ONE's actual vessel-arrival event for the final port of discharge."""
+
+    normalized_pod = pod_name.strip().upper() if isinstance(pod_name, str) and pod_name.strip() else None
+    candidates: list[tuple[datetime, str | None]] = []
+
+    for event in cargo_events:
+        if not isinstance(event, dict):
+            continue
+        if _safe_text(event.get("matrixId")) != "E089":
+            continue
+        if (extract_event_state_hint(event) or "").strip().upper() != "ACTUAL":
+            continue
+
+        location_name = _safe_text(event.get("locationName"))
+        if normalized_pod and location_name:
+            normalized_location = location_name.strip().upper()
+            if normalized_pod not in normalized_location and normalized_location not in normalized_pod:
+                continue
+
+        eta_raw = _safe_text(event.get("localPortDate")) or _safe_text(event.get("date"))
+        eta_time = parse_event_time(eta_raw)
+        if eta_time is not None:
+            candidates.append((eta_time, eta_raw))
+
+    if not candidates:
+        return None, None
+    return max(candidates, key=lambda item: item[0])
 
 
 def _extract_eta_from_voyage_list_data(items: list[dict[str, Any]]) -> tuple[datetime | None, str | None]:

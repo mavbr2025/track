@@ -7,6 +7,7 @@ from shipment_sync.config import Settings
 from shipment_sync.carriers.one import (
     OneAdapter,
     _extract_eta_from_cargo_events,
+    _extract_eta_from_search_item,
     _extract_booking_status_text,
     _extract_final_discharge_vessel_voyage,
     _enrich_moves_with_voyage_legs,
@@ -150,6 +151,31 @@ def test_extract_eta_from_cargo_events_uses_trigger_type_for_estimated_events() 
 
     assert eta_time == datetime(2026, 5, 20, 4, 0, tzinfo=timezone.utc)
     assert eta_raw == "2026-05-20T04:00:00+00:00"
+
+
+def test_extract_eta_from_search_item_prefers_actual_pod_arrival_over_stale_estimated_delivery_event() -> None:
+    eta_time, eta_raw = _extract_eta_from_search_item(
+        {
+            "pod": {"locationName": "PUERTO QUETZAL"},
+            "cargoEvents": [
+                {
+                    "matrixId": "E105",
+                    "locationName": "PUERTO QUETZAL",
+                    "localPortDate": "2026-07-06T10:33:00.000Z",
+                    "trigger": "ESTIMATED",
+                },
+                {
+                    "matrixId": "E089",
+                    "locationName": "PUERTO QUETZAL",
+                    "localPortDate": "2026-08-05T21:18:00.000Z",
+                    "trigger": "ACTUAL",
+                },
+            ],
+        }
+    )
+
+    assert eta_time == datetime(2026, 8, 5, 21, 18, tzinfo=timezone.utc)
+    assert eta_raw == "2026-08-05T21:18:00.000Z"
 
 
 def test_latest_move_from_search_item_uses_trigger_type() -> None:
