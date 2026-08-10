@@ -29,6 +29,14 @@ class _StubResponse:
         return self._payload
 
 
+class _PayloadResponse:
+    def __init__(self, payload: bytes, url: str) -> None:
+        self.content = payload
+        self.headers = {"content-type": "application/json"}
+        self.url = url
+        self._content_consumed = True
+
+
 class _StubSession:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
@@ -335,7 +343,85 @@ def test_fetch_status_treats_empty_booking_search_with_voyage_as_processing() ->
     assert status.booking_status_text == "Data Processing"
     assert status.eta_local_text == "2026-07-29T04:00:00.000Z"
     assert status.vessel_voyage == "ONE SERENITY 2625E"
+    assert status.final_vessel_voyage == "ONE SERENITY 2625E"
     assert status.recent_moves[0].name == "Transport Departed (DEPA)"
+
+
+def test_fetch_status_sets_canonical_final_vessel_separately_from_actual_event(monkeypatch) -> None:
+    adapter = OneAdapter()
+    adapter.eta_only_mode = True
+    adapter.session = _RouteStubSession(
+        search_payload={
+            "data": [
+                {
+                    "bookingNo": "SZPGH2579600",
+                    "containerNo": "ONEU0000001",
+                    "pod": {"locationCode": "GTPRQ", "locationName": "PUERTO QUETZAL, GUATEMALA"},
+                }
+            ]
+        },
+        voyage_payload={"data": []},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_fetch_voyage_list",
+        lambda booking_no: [
+            {
+                "vesselEngName": "SC MONTANA",
+                "scheduleVoyageNumber": "2630",
+                "scheduleDirectionCode": "E",
+                "outboundConsortiumVoyage": "0M34IS1MA",
+                "pod": {"locationCode": "GTPRQ", "locationName": "PUERTO QUETZAL, GUATEMALA"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_fetch_recent_moves",
+        lambda booking_no, container_no: [
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="PUERTO QUETZAL, GUATEMALA",
+                event_time=datetime(2026, 8, 5, 21, 18, tzinfo=timezone.utc),
+                event_state="actual",
+                vessel_voyage="SC MONTANA 2630E",
+            )
+        ],
+    )
+
+    status = adapter._fetch_status_from_edh("SZPGH2579600", "B")
+
+    assert status is not None
+    assert status.vessel_voyage == "SC MONTANA 0M34IS1MA"
+    assert status.final_vessel_voyage == "SC MONTANA 0M34IS1MA"
+    assert status.recent_moves[0].vessel_voyage == "SC MONTANA 2630E"
+
+
+def test_fetch_status_uses_configured_fallback_when_edh_has_no_result(monkeypatch) -> None:
+    adapter = OneAdapter()
+    adapter.eta_only_mode = False
+    adapter.url_template = "https://tracking.example.test/cargo"
+    monkeypatch.setattr(adapter, "_fetch_status_from_edh", lambda *args, **kwargs: None)
+
+    def fake_get_with_retries(session, url, **kwargs):
+        assert url == "https://tracking.example.test/cargo"
+        assert kwargs["params"] == {"trakNoParam": "NB5BI3647900", "trakNoTpCdParam": "B"}
+        return _PayloadResponse(b'{"shipmentStatus":"In transit"}', "https://tracking.example.test/cargo?booking=NB5BI3647900")
+
+    monkeypatch.setattr("shipment_sync.carriers.one.get_with_retries", fake_get_with_retries)
+    shipment = ShipmentRef(
+        task_id="task-one-fallback",
+        task_name="ONE fallback",
+        shipping_line="one",
+        booking_no="NB5BI3647900",
+        container_no=None,
+        list_id="list-1",
+    )
+
+    status = adapter.fetch_status(shipment)
+
+    assert status.status_text == "In transit"
+    assert status.raw_source == "one-web:https://tracking.example.test/cargo?booking=NB5BI3647900"
 
 
 def test_fetch_status_uses_booking_search_to_discover_sibling_containers() -> None:

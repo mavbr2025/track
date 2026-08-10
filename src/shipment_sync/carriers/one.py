@@ -163,7 +163,7 @@ class OneAdapter(CarrierAdapter):
                 eta_time = eta_from_voyage
                 eta_local_text = eta_from_voyage_local
                 raw_source = f"one-edh-voyage:{self.edh_base_url}/vessel/track-and-trace/voyage-list"
-        vessel_voyage = _extract_final_discharge_vessel_voyage(voyage_legs, first_item)
+        final_discharge_vessel_voyage = _extract_final_discharge_vessel_voyage(voyage_legs, first_item)
 
         recent_moves = _enrich_moves_with_voyage_legs(
             self._fetch_recent_moves(booking_no, container_no),
@@ -186,7 +186,8 @@ class OneAdapter(CarrierAdapter):
                 container_discovery_authoritative=search_type == "CNTR_NO",
                 raw_source=raw_source,
                 source_url=source_url,
-                vessel_voyage=vessel_voyage,
+                vessel_voyage=final_discharge_vessel_voyage,
+                final_vessel_voyage=final_discharge_vessel_voyage,
                 booking_status_text=booking_status_text,
             )
 
@@ -195,10 +196,11 @@ class OneAdapter(CarrierAdapter):
         latest_event_location = _safe_text(latest_event.get("locationName"))
         latest_event_time = parse_event_time(_safe_text(latest_event.get("date")))
 
-        vessel_voyage = first_item.get("vesselVoyage") if isinstance(first_item.get("vesselVoyage"), dict) else {}
-        vessel_name = _safe_text(vessel_voyage.get("vesselName"))
-        voyage_no = _safe_text(vessel_voyage.get("voyageNo"))
+        reported_vessel_voyage = first_item.get("vesselVoyage") if isinstance(first_item.get("vesselVoyage"), dict) else {}
+        vessel_name = _safe_text(reported_vessel_voyage.get("vesselName"))
+        voyage_no = _safe_text(reported_vessel_voyage.get("voyageNo"))
         movement_details = " ".join([x for x in [vessel_name, voyage_no] if x]) or None
+        vessel_voyage = final_discharge_vessel_voyage or movement_details
 
         status_text = latest_event_name or _eta_status_text(eta_time)
         return ShipmentStatus(
@@ -215,6 +217,7 @@ class OneAdapter(CarrierAdapter):
             source_url=source_url,
             movement_details=movement_details,
             vessel_voyage=vessel_voyage,
+            final_vessel_voyage=final_discharge_vessel_voyage,
             booking_status_text=booking_status_text,
         )
 
@@ -224,7 +227,7 @@ class OneAdapter(CarrierAdapter):
             return None
 
         eta_time, eta_local_text = _extract_eta_from_voyage_list_data(voyage_legs)
-        vessel_voyage = _extract_final_discharge_vessel_voyage(voyage_legs, {})
+        final_discharge_vessel_voyage = _extract_final_discharge_vessel_voyage(voyage_legs, {})
         departure_move = _extract_departure_move_from_voyage_list_data(voyage_legs)
         recent_moves = [departure_move] if departure_move is not None else []
         raw_source = f"one-edh-voyage:{self.edh_base_url}/vessel/track-and-trace/voyage-list"
@@ -238,7 +241,8 @@ class OneAdapter(CarrierAdapter):
             recent_moves=recent_moves,
             raw_source=raw_source,
             source_url=source_url,
-            vessel_voyage=vessel_voyage,
+            vessel_voyage=final_discharge_vessel_voyage,
+            final_vessel_voyage=final_discharge_vessel_voyage,
             booking_status_text=booking_status_text,
         )
 
@@ -309,23 +313,6 @@ class OneAdapter(CarrierAdapter):
             reverse=True,
         )
 
-
-def _extract_one_event_vessel_voyage(event: dict[str, Any]) -> str | None:
-    """Read ONE's structured vessel data before using the generic event parser."""
-    vessel = event.get("edhVessel")
-    if isinstance(vessel, dict):
-        vessel_name = _safe_text(vessel.get("name")) or _safe_text(vessel.get("vesselName"))
-        voyage = (
-            _safe_text(vessel.get("outboundConsortiumVoyage"))
-            or _schedule_voyage_text(vessel)
-            or _safe_text(vessel.get("voyNo"))
-        )
-        parts = [part for part in (vessel_name, voyage) if part]
-        if parts:
-            return " ".join(parts)
-
-    return extract_event_vessel_voyage(event)
-
     def _fetch_payload(self, reference: str, ref_type_code: str) -> tuple[dict, str]:
         headers = {self.api_key_header: self.api_key} if self.api_key else {}
         params = {
@@ -360,6 +347,23 @@ def _extract_one_event_vessel_voyage(event: dict[str, Any]) -> str | None:
         )
         payload = extract_json_from_http_response(response)
         return payload, f"one-api:{self.api_url}"
+
+
+def _extract_one_event_vessel_voyage(event: dict[str, Any]) -> str | None:
+    """Read ONE's structured vessel data before using the generic event parser."""
+    vessel = event.get("edhVessel")
+    if isinstance(vessel, dict):
+        vessel_name = _safe_text(vessel.get("name")) or _safe_text(vessel.get("vesselName"))
+        voyage = (
+            _safe_text(vessel.get("outboundConsortiumVoyage"))
+            or _schedule_voyage_text(vessel)
+            or _safe_text(vessel.get("voyNo"))
+        )
+        parts = [part for part in (vessel_name, voyage) if part]
+        if parts:
+            return " ".join(parts)
+
+    return extract_event_vessel_voyage(event)
 
 
 def _pick_reference(shipment: ShipmentRef, booking_code: str, container_code: str) -> tuple[str, str]:

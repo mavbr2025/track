@@ -799,6 +799,7 @@ def test_plan_shipment_update_replaces_barge_with_latest_actual_mother_vessel() 
     status = ShipmentStatus(
         status_text="In transit",
         vessel_voyage="MSC PLANNED FINAL 900E",
+        final_vessel_voyage="MSC PLANNED FINAL 900E",
         recent_moves=[
             MovementEvent(
                 name="Container Loaded (LOAD)",
@@ -949,6 +950,38 @@ def test_plan_shipment_update_prefers_confirmed_final_vessel_before_departure() 
     updates = {update.label: update for update in plan.custom_field_updates}
 
     assert updates["Vessel/Voyage"].value == "MAERSK SEQUOIA 631N"
+
+
+def test_plan_shipment_update_keeps_one_canonical_final_voyage_over_schedule_event() -> None:
+    client = ClickUpClient(_settings(cf_vessel_voyage="vessel-voyage-field"))
+    shipment = ShipmentRef(
+        task_id="task-one-sc-montana",
+        task_name="ONE canonical final voyage",
+        shipping_line="one",
+        booking_no="SZPGH2579600",
+        container_no="ONEU0000001",
+        list_id="list-1",
+        current_field_values={"vessel-voyage-field": "SC MONTANA 2630E"},
+    )
+    status = ShipmentStatus(
+        status_text="ETA 2026-08-05",
+        vessel_voyage="SC MONTANA 0M34IS1MA",
+        final_vessel_voyage="SC MONTANA 0M34IS1MA",
+        recent_moves=[
+            MovementEvent(
+                name="Transport Arrived (ARRI)",
+                location="PUERTO QUETZAL, GUATEMALA",
+                event_time=_days_from_now(-1),
+                event_state="actual",
+                vessel_voyage="SC MONTANA 2630E",
+            )
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+    updates = {update.label: update for update in plan.custom_field_updates}
+
+    assert updates["Vessel/Voyage"].value == "SC MONTANA 0M34IS1MA"
 
 
 def test_plan_shipment_update_does_not_move_origin_port_for_future_etd_without_barge_leg() -> None:
