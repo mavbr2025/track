@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from shipment_sync.clickup_client import ClickUpClient
 from shipment_sync.config import Settings
 from shipment_sync.main import _filter_shipments, _print_preview_plan
-from shipment_sync.msc_browser_assisted import build_queue, status_from_browser_capture, write_queue
+from shipment_sync.msc_browser_assisted import build_queue, is_msc_line, status_from_browser_capture, write_queue
 from shipment_sync.terminal import terminal_safe_text
 
 
@@ -29,7 +29,7 @@ def main() -> None:
     shipments = _filter_shipments(
         client.list_shipments(), task_id=args.task_id, booking=args.booking, container=args.container
     )
-    msc_shipments = [shipment for shipment in shipments if shipment.shipping_line.strip().lower() == "msc"]
+    msc_shipments = [shipment for shipment in shipments if is_msc_line(shipment.shipping_line)]
 
     if args.export_queue:
         items = build_queue(msc_shipments)

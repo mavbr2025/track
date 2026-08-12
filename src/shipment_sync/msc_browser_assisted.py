@@ -32,7 +32,7 @@ def build_queue(shipments: Iterable[ShipmentRef]) -> list[MscBrowserQueueItem]:
     """Build a local review queue. This function performs no carrier or ClickUp writes."""
     items: list[MscBrowserQueueItem] = []
     for shipment in shipments:
-        if shipment.shipping_line.strip().lower() not in {"msc", "msc shipping line", "mediterranean shipping company"}:
+        if not is_msc_line(shipment.shipping_line):
             continue
         references = _container_references(shipment.container_no)
         if not references and not shipment.booking_no:
@@ -133,6 +133,10 @@ def _container_references(value: str | None) -> list[str]:
     return references
 
 
+def is_msc_line(shipping_line: str) -> bool:
+    return shipping_line.strip().lower() in {"msc", "msc shipping line", "mediterranean shipping company"}
+
+
 def _value_after_label(lines: list[str], label: str) -> str | None:
     normalized_label = label.casefold()
     for index, line in enumerate(lines[:-1]):
@@ -168,7 +172,6 @@ def _capture_events(lines: list[str]) -> list[dict[str, str]]:
 def _looks_like_event_description(value: str) -> bool:
     normalized = value.casefold()
     markers = (
-        "arrival",
         "arrival",
         "departure",
         "loaded",
