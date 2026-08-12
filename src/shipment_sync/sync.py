@@ -91,6 +91,7 @@ def _run_sync(
     prefiltered_terminal_status_counts: dict[str, int] = {}
     unsupported_line_counts: dict[str, int] = {}
     adapter_config_counts: dict[str, int] = {}
+    carrier_access_failures: dict[str, str] = {}
     progress_every = _int_env("SHIPMENT_PROGRESS_EVERY", default=10, min_value=1)
     supported_lines = set(adapters.keys())
     allowed_lines = set(client.settings.shipment_allowed_lines or [])
@@ -213,6 +214,17 @@ def _run_sync(
         list_label = _list_label(shipment.list_name, shipment.list_id)
         candidates_by_list[list_label] = candidates_by_list.get(list_label, 0) + 1
 
+        access_failure = carrier_access_failures.get(shipment.shipping_line)
+        if access_failure is not None:
+            skipped += 1
+            if audit is not None:
+                audit.log_task(
+                    shipment=shipment,
+                    outcome="skipped_carrier_access",
+                    message=access_failure,
+                )
+            continue
+
         adapter = adapters.get(shipment.shipping_line)
         if not adapter:
             unsupported_line_counts[shipment.shipping_line] = unsupported_line_counts.get(shipment.shipping_line, 0) + 1
@@ -270,6 +282,12 @@ def _run_sync(
                     )
         except Exception as exc:
             message = str(exc)
+            if _carrier_access_denied(shipment.shipping_line, message):
+                carrier_access_failures[shipment.shipping_line] = message
+                message = (
+                    f"{message}. Carrier circuit breaker opened; remaining "
+                    f"{shipment.shipping_line} shipments will not be queried in this run."
+                )
             if "adapter not configured" in message.lower():
                 key = f"{shipment.shipping_line}: {message}"
                 adapter_config_counts[key] = adapter_config_counts.get(key, 0) + 1
@@ -306,6 +324,12 @@ def _run_sync(
                     error=message,
                 )
             skipped += 1
+
+    if carrier_access_failures:
+        failures = "; ".join(
+            f"{line_name}: {message}" for line_name, message in sorted(carrier_access_failures.items())
+        )
+        raise RuntimeError(f"Carrier access failure: {failures}")
 
     if prefiltered_excluded_counts:
         print("Prefiltered excluded shipping lines:", file=sys.stderr)
@@ -385,6 +409,19 @@ def _wan_hai_manual_capture_needed(shipping_line: str, message: str) -> bool:
         "query form not available",
         "blocked by",
         "wanhaiantibotblocked",
+    )
+    return any(marker in normalized_message for marker in markers)
+
+
+def _carrier_access_denied(shipping_line: str, message: str) -> bool:
+    """Identify carrier-wide anti-bot/access failures that should stop the line batch."""
+    normalized_message = message.lower()
+    markers = (
+        "page access denied",
+        "endpoint blocked by anti-bot",
+        "anti-bot challenge",
+        "page challenge did not clear",
+        "access denied",
     )
     return any(marker in normalized_message for marker in markers)
 

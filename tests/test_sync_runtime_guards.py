@@ -5,6 +5,7 @@ from shipment_sync.config import DEFAULT_SHIPMENT_TERMINAL_STATUSES, Settings
 from shipment_sync.models import ShipmentRef
 from shipment_sync.sync import (
     _carrier_call_timeout_seconds,
+    _carrier_access_denied,
     _carrier_process_isolated,
     _carrier_process_timeout_seconds,
     _env_prefix_for_line,
@@ -146,6 +147,12 @@ def test_wan_hai_manual_capture_detector_matches_antibot_errors() -> None:
     assert _wan_hai_manual_capture_needed("wan hai", "query form not available")
     assert not _wan_hai_manual_capture_needed("one", "blocked by anti-bot protection")
     assert not _wan_hai_manual_capture_needed("wan hai", "returned no results")
+
+
+def test_carrier_access_denied_matches_msc_browser_denial() -> None:
+    assert _carrier_access_denied("MSC", "MSC page access denied in browser session")
+    assert _carrier_access_denied("MSC", "MSC endpoint blocked by anti-bot challenge")
+    assert not _carrier_access_denied("MSC", "MSC returned no result for this booking")
 
 
 def test_run_sync_requests_wan_hai_manual_capture_on_antibot(monkeypatch) -> None:
