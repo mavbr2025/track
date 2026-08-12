@@ -26,8 +26,13 @@ def main() -> None:
     load_dotenv()
     settings = Settings.from_env()
     client = ClickUpClient(settings)
+    # This queue is carrier-scoped by design. Require the server-side ClickUp
+    # filter so large non-MSC lists are never loaded into the operator workflow.
     shipments = _filter_shipments(
-        client.list_shipments(), task_id=args.task_id, booking=args.booking, container=args.container
+        client.list_shipments(require_carrier_prefilter=True),
+        task_id=args.task_id,
+        booking=args.booking,
+        container=args.container,
     )
     msc_shipments = [shipment for shipment in shipments if is_msc_line(shipment.shipping_line)]
 

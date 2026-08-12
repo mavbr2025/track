@@ -1,5 +1,5 @@
 from shipment_sync.models import ShipmentRef
-from shipment_sync.msc_browser_assisted import build_queue, status_from_browser_capture
+from shipment_sync.msc_browser_assisted import build_queue, is_msc_line, status_from_browser_capture
 
 
 def test_build_queue_uses_container_references_before_booking() -> None:
@@ -19,6 +19,12 @@ def test_build_queue_uses_container_references_before_booking() -> None:
     assert len(items) == 1
     assert items[0].container_numbers == ["TRHU5066421", "CAIU7832977"]
     assert items[0].booking_no == "BOOK-1"
+
+
+def test_msc_line_normalization_accepts_registered_aliases() -> None:
+    assert is_msc_line("MSC")
+    assert is_msc_line("Mediterranean Shipping Company")
+    assert not is_msc_line("ONE")
 
 
 def test_browser_capture_maps_visible_msc_result_to_existing_status_model() -> None:
