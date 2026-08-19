@@ -1593,6 +1593,13 @@ def _find_destination_discharge_index(moves: list[MovementEvent]) -> int | None:
     if not discharge_indices:
         return None
 
+    # Carrier feeds can append untimed itinerary placeholders after completed
+    # events. A dated discharge is more reliable for splitting origin and
+    # destination handling events; use untimed discharges only as a fallback.
+    dated_discharge_indices = [idx for idx in discharge_indices if moves[idx].event_time is not None]
+    if dated_discharge_indices:
+        discharge_indices = dated_discharge_indices
+
     for idx in reversed(discharge_indices):
         later_codes = {
             _event_code_from_move(candidate)

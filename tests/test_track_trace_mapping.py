@@ -1856,6 +1856,60 @@ def test_plan_shipment_update_uses_final_discharge_after_transshipment() -> None
     assert updates["Gate in empty"].value.date().isoformat() == "2026-04-03"
 
 
+def test_plan_shipment_update_ignores_untimed_discharge_placeholder_after_destination_delivery() -> None:
+    client = ClickUpClient(_settings(clickup_use_task_status=True))
+    shipment = ShipmentRef(
+        task_id="task-one-untimed-placeholder",
+        task_name="ONE destination delivery with itinerary placeholder",
+        shipping_line="one",
+        booking_no="NB5BI3197900",
+        container_no="TCLU8540106",
+        list_id="list-1",
+        current_task_status="arribado en puerto",
+    )
+    status = ShipmentStatus(
+        status_text="ETA 2026-08-11T03:43:00+00:00",
+        recent_moves=[
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 8, 11, 6, 3, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Gated Out (GTOT)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 8, 18, 16, 34, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Gated In (GTIN)",
+                location="PUERTO QUETZAL",
+                event_time=datetime(2026, 8, 18, 22, 34, tzinfo=timezone.utc),
+                event_state="actual",
+            ),
+            MovementEvent(
+                name="Container Discharged (DISC)",
+                location="MANZANILLO",
+                event_state="estimated",
+            ),
+            MovementEvent(
+                name="Container Loaded (LOAD)",
+                location="MANZANILLO",
+                event_state="estimated",
+            ),
+        ],
+    )
+
+    plan = client.plan_shipment_update(shipment, status)
+
+    updates = {update.label: update for update in plan.custom_field_updates}
+    assert updates["Discharge date"].value.date().isoformat() == "2026-08-11"
+    assert updates["Gate out delivery"].value.date().isoformat() == "2026-08-18"
+    assert updates["Gate in empty"].value.date().isoformat() == "2026-08-18"
+    assert plan.task_status_update == "Vacío devuelto"
+
+
 def test_format_port_local_time_preserves_carrier_clock_time() -> None:
     assert format_port_local_time("2026-03-27T19:16:00.000Z", None) == "2026-03-27 19:16"
     assert format_port_local_time("27/03/2026 19:16", None) == "2026-03-27 19:16"
