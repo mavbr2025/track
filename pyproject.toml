@@ -27,6 +27,7 @@ linkedin-candidates = "shipment_sync.linkedin_candidates_main:main"
 linkedin-copilot = "shipment_sync.linkedin_copilot_main:main"
 clickup-fields-export = "shipment_sync.clickup_fields_main:main"
 clickup-workspace-audit = "shipment_sync.clickup_audit_main:main"
+msc-browser-assisted = "shipment_sync.msc_browser_assisted_main:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

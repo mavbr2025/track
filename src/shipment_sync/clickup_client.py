@@ -70,7 +70,7 @@ class ClickUpClient:
         assert last_error is not None
         raise last_error
 
-    def list_shipments(self) -> list[ShipmentRef]:
+    def list_shipments(self, *, require_carrier_prefilter: bool = False) -> list[ShipmentRef]:
         target_lists = self._resolve_target_lists()
         total_lists = len(target_lists)
         if total_lists > self.settings.clickup_max_lists_per_run:
@@ -101,10 +101,16 @@ class ClickUpClient:
         for idx, list_id in enumerate(target_lists.keys(), start=1):
             print(f"ClickUp list {idx}/{total_lists}: {list_id}", file=sys.stderr)
             carrier_filter_value = self._shipping_line_filter_value_for_list(list_id)
+            if require_carrier_prefilter and carrier_filter_value is None:
+                raise ClickUpWorkloadLimitError(
+                    "ClickUp carrier prefilter is required for this run but could not be established "
+                    f"for list {list_id}."
+                )
             open_tasks = self._fetch_tasks(
                 list_id=list_id,
                 archived=False,
                 carrier_filter_value=carrier_filter_value,
+                require_carrier_prefilter=require_carrier_prefilter,
             )
             for t in open_tasks:
                 add_task_if_open(t)
@@ -114,6 +120,7 @@ class ClickUpClient:
                     list_id=list_id,
                     archived=True,
                     carrier_filter_value=carrier_filter_value,
+                    require_carrier_prefilter=require_carrier_prefilter,
                 )
                 for t in archived_tasks:
                     add_task_if_open(t)
@@ -179,6 +186,82 @@ class ClickUpClient:
                 )
             )
         print(f"ClickUp candidate shipment tasks: {len(shipments)}", file=sys.stderr)
+        return shipments
+
+    def get_shipments_by_task_ids(
+        self,
+        task_ids: list[str],
+        *,
+        allowed_list_ids: set[str] | None = None,
+    ) -> list[ShipmentRef]:
+        """Load an explicitly reviewed set of shipment tasks without list discovery.
+
+        This is used by operator-assisted imports. The task must still belong to
+        the configured production list scope and carry the expected tracking
+        fields; a batch cannot expand its own authority by naming another task.
+        """
+        allowed_list_ids = allowed_list_ids or set(self.settings.clickup_list_ids)
+        shipments: list[ShipmentRef] = []
+        seen_task_ids: set[str] = set()
+        for task_id in task_ids:
+            task_id = str(task_id or "").strip()
+            if not task_id or task_id in seen_task_ids:
+                continue
+            seen_task_ids.add(task_id)
+            response = self._request("get", f"{self.base_url}/task/{task_id}", timeout=30)
+            response.raise_for_status()
+            task = response.json()
+            if not isinstance(task, dict) or not _is_open_task(task):
+                continue
+
+            list_obj = task.get("list") if isinstance(task.get("list"), dict) else {}
+            list_id = str(list_obj.get("id") or "")
+            if list_id not in allowed_list_ids:
+                raise ClickUpWorkloadLimitError(
+                    f"Task {task_id} is outside the configured Track & Trace list scope."
+                )
+
+            fields = _field_map(task.get("custom_fields", []))
+            shipping_line = _field_text(fields.get(self.settings.cf_shipping_line))
+            booking_no = _field_text(fields.get(self.settings.cf_booking_no))
+            container_no = _field_text(fields.get(self.settings.cf_container_no))
+            if not shipping_line or (not booking_no and not container_no):
+                raise ClickUpWorkloadLimitError(
+                    f"Task {task_id} is missing the carrier or a tracking reference."
+                )
+            shipments.append(
+                ShipmentRef(
+                    task_id=str(task.get("id") or task_id),
+                    task_name=task.get("name", ""),
+                    shipping_line=shipping_line.strip().lower(),
+                    booking_no=booking_no,
+                    container_no=container_no,
+                    list_id=list_id,
+                    list_name=list_obj.get("name") if isinstance(list_obj.get("name"), str) else None,
+                    last_checked_at=(
+                        _parse_last_checked(fields.get(self.settings.cf_status_last_checked))
+                        if self.settings.cf_status_last_checked
+                        else None
+                    ),
+                    current_status_value=(
+                        _field_text(fields.get(self.settings.cf_shipment_status))
+                        if self.settings.cf_shipment_status
+                        else None
+                    ),
+                    current_task_status=_task_status_text(task),
+                    track_trace_snapshot_hash=(
+                        _field_text(fields.get(self.settings.cf_track_trace_snapshot))
+                        if self.settings.cf_track_trace_snapshot
+                        else None
+                    ),
+                    expected_container_count=_expected_container_count(task.get("custom_fields", [])),
+                    current_field_values={
+                        field_id: field_payload.get("value")
+                        for field_id, field_payload in fields.items()
+                    },
+                )
+            )
+        print(f"ClickUp explicit shipment tasks: {len(shipments)}", file=sys.stderr)
         return shipments
 
     def _resolve_target_lists(self) -> dict[str, str]:
@@ -420,6 +503,7 @@ class ClickUpClient:
         list_id: str,
         archived: bool,
         carrier_filter_value: str | int | None = None,
+        require_carrier_prefilter: bool = False,
     ) -> list[dict[str, Any]]:
         try:
             return self._fetch_tasks_page_loop(
@@ -428,7 +512,7 @@ class ClickUpClient:
                 carrier_filter_value=carrier_filter_value,
             )
         except requests.RequestException as exc:
-            if carrier_filter_value is None:
+            if carrier_filter_value is None or require_carrier_prefilter:
                 raise
             if list_id not in self._carrier_filter_warning_lists:
                 print(
@@ -823,6 +907,37 @@ class ClickUpClient:
         if self._recent_wan_hai_manual_capture_comment_exists(shipment.task_id):
             return False
         self._post_comment(shipment.task_id, _wan_hai_manual_capture_comment(shipment, self.settings, error=error))
+        return True
+
+    def report_msc_tracking_failure(self, shipment: ShipmentRef, *, reference: str, error: str) -> bool:
+        """Post a concise, idempotent carrier diagnostic without mutating shipment data."""
+        marker = "MSC Track & Trace exception"
+        try:
+            comments = self._fetch_recent_task_comments(shipment.task_id, limit=10)
+        except requests.RequestException as exc:
+            print(f"MSC failure comment cooldown check skipped for task {shipment.task_id}: {exc}", file=sys.stderr)
+            comments = []
+        normalized_reference = reference.strip().upper()
+        for raw in comments:
+            text = "\n".join(_comment_reference_texts(raw))
+            if marker in text and normalized_reference in text.upper():
+                return False
+        self._post_comment(
+            shipment.task_id,
+            "\n".join(
+                [
+                    marker,
+                    "",
+                    "MSC returned no usable tracking result during the normal public-browser review.",
+                    f"Reference checked: {reference}",
+                    f"Error: {error}",
+                    f"Carrier source: https://www.msc.com/en/track-a-shipment",
+                    "",
+                    "This failed reference did not change shipment fields, Last T&T Update, or workflow status.",
+                    "Action required: verify the booking/container reference with MSC or the booking party, then rerun Track & Trace.",
+                ]
+            ),
+        )
         return True
 
     def _recent_wan_hai_manual_capture_comment_exists(self, task_id: str) -> bool:

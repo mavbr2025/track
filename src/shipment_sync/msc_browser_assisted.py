@@ -28,6 +28,23 @@ class MscBrowserQueueItem:
     tracking_url: str
 
 
+@dataclass(frozen=True)
+class MscBrowserCapture:
+    """A validated operator-copied result linked to one ClickUp task."""
+
+    task_id: str
+    capture: str
+
+
+@dataclass(frozen=True)
+class MscBrowserFailure:
+    """A carrier outcome that must be visible to the shipment owner."""
+
+    task_id: str
+    reference: str
+    error: str
+
+
 def build_queue(shipments: Iterable[ShipmentRef]) -> list[MscBrowserQueueItem]:
     """Build a local review queue. This function performs no carrier or ClickUp writes."""
     items: list[MscBrowserQueueItem] = []
@@ -70,11 +87,40 @@ def write_queue(path: Path, items: Iterable[MscBrowserQueueItem]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def read_import_batch(path: Path) -> tuple[list[MscBrowserCapture], list[MscBrowserFailure]]:
+    """Load a local MSC browser-review batch without making any external write.
+
+    Captures must be copied from the normal public MSC result page. Failures are
+    separate from captures so a missing carrier result can never be projected as
+    a shipment status or a Last T&T Update.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("MSC import batch must be a JSON object")
+
+    captures = [_capture_from_dict(item) for item in _list_value(payload, "captures")]
+    failures = [_failure_from_dict(item) for item in _list_value(payload, "failures")]
+    if not captures and not failures:
+        raise ValueError("MSC import batch must include at least one capture or failure")
+
+    capture_ids = [item.task_id for item in captures]
+    duplicate_captures = sorted({task_id for task_id in capture_ids if capture_ids.count(task_id) > 1})
+    if duplicate_captures:
+        raise ValueError(f"MSC import batch includes duplicate capture task IDs: {', '.join(duplicate_captures)}")
+    failure_ids = [item.task_id for item in failures]
+    duplicate_failures = sorted({task_id for task_id in failure_ids if failure_ids.count(task_id) > 1})
+    if duplicate_failures:
+        raise ValueError(f"MSC import batch includes duplicate failure task IDs: {', '.join(duplicate_failures)}")
+    return captures, failures
+
+
 def status_from_browser_capture(text: str) -> ShipmentStatus:
     """Parse an operator-copied MSC result into the existing MSC projection model.
 
-    The parser intentionally accepts only a complete visible result containing a
-    container identifier and a POD ETA. It never infers a missing itinerary.
+    The parser accepts a visible result with a container identifier and dated
+    tracking events. A POD ETA is optional because MSC removes it from some
+    completed shipments; the shared MSC projection then derives the relevant
+    date from the actual movement history, as the ECS adapter already does.
     """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     containers = _container_references(text)
@@ -82,8 +128,8 @@ def status_from_browser_capture(text: str) -> ShipmentStatus:
         raise ValueError("MSC browser capture does not contain a container number")
 
     eta = _value_after_label(lines, "POD ETA")
-    if not eta or not _DATE_RE.fullmatch(eta):
-        raise ValueError("MSC browser capture does not contain a valid POD ETA")
+    if eta and not _DATE_RE.fullmatch(eta):
+        raise ValueError("MSC browser capture contains an invalid POD ETA")
 
     events = _capture_events(lines)
     if not events:
@@ -131,6 +177,34 @@ def _container_references(value: str | None) -> list[str]:
             seen.add(reference)
             references.append(reference)
     return references
+
+
+def _list_value(payload: dict[str, object], key: str) -> list[object]:
+    value = payload.get(key, [])
+    if not isinstance(value, list):
+        raise ValueError(f"MSC import batch field {key!r} must be a list")
+    return value
+
+
+def _capture_from_dict(value: object) -> MscBrowserCapture:
+    if not isinstance(value, dict):
+        raise ValueError("MSC capture entries must be objects")
+    task_id = str(value.get("task_id") or "").strip()
+    capture = value.get("capture")
+    if not task_id or not isinstance(capture, str) or not capture.strip():
+        raise ValueError("MSC capture entries require task_id and non-empty capture")
+    return MscBrowserCapture(task_id=task_id, capture=capture)
+
+
+def _failure_from_dict(value: object) -> MscBrowserFailure:
+    if not isinstance(value, dict):
+        raise ValueError("MSC failure entries must be objects")
+    task_id = str(value.get("task_id") or "").strip()
+    reference = str(value.get("reference") or "").strip()
+    error = str(value.get("error") or "").strip()
+    if not task_id or not reference or not error:
+        raise ValueError("MSC failure entries require task_id, reference, and error")
+    return MscBrowserFailure(task_id=task_id, reference=reference, error=error)
 
 
 def is_msc_line(shipping_line: str) -> bool:
