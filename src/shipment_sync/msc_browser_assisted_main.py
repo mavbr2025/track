@@ -13,6 +13,7 @@ from shipment_sync.config import Settings
 from shipment_sync.main import _filter_shipments, _print_preview_plan
 from shipment_sync.msc_browser_assisted import (
     build_queue,
+    consolidate_browser_statuses,
     is_msc_line,
     read_import_batch,
     status_from_browser_capture,
@@ -123,20 +124,24 @@ def _import_batch(client: ClickUpClient, shipments, captures, failures, *, apply
     updated = 0
     unchanged = 0
     failure_comments = 0
+    captures_by_task: dict[str, list] = {}
     for item in captures:
-        shipment = shipments_by_id[item.task_id]
+        captures_by_task.setdefault(item.task_id, []).append(item)
+
+    for task_id, task_captures in captures_by_task.items():
+        shipment = shipments_by_id[task_id]
         try:
-            status = status_from_browser_capture(item.capture)
+            parsed = [(item, status_from_browser_capture(item.capture)) for item in task_captures]
+            status = consolidate_browser_statuses(shipment, parsed)
         except ValueError as exc:
             error = str(exc)
             print(
                 terminal_safe_text(
-                    f"- {shipment.task_name} | task={shipment.task_id} | MSC capture rejected | error={error}"
+                    f"- {shipment.task_name} | task={shipment.task_id} | MSC container review rejected | error={error}"
                 )
             )
-            if apply and client.report_msc_tracking_failure(
+            if apply and client.report_msc_container_review_issue(
                 shipment,
-                reference=shipment.container_no or shipment.booking_no or "unknown reference",
                 error=error,
             ):
                 failure_comments += 1

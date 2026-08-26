@@ -34,6 +34,7 @@ class MscBrowserCapture:
 
     task_id: str
     capture: str
+    reference: str | None = None
 
 
 @dataclass(frozen=True)
@@ -103,10 +104,18 @@ def read_import_batch(path: Path) -> tuple[list[MscBrowserCapture], list[MscBrow
     if not captures and not failures:
         raise ValueError("MSC import batch must include at least one capture or failure")
 
-    capture_ids = [item.task_id for item in captures]
-    duplicate_captures = sorted({task_id for task_id in capture_ids if capture_ids.count(task_id) > 1})
+    capture_keys = [
+        (item.task_id, (item.reference or _first_container_reference(item.capture) or "").upper())
+        for item in captures
+    ]
+    duplicate_captures = sorted(
+        {task_id for task_id, reference in capture_keys if capture_keys.count((task_id, reference)) > 1}
+    )
     if duplicate_captures:
-        raise ValueError(f"MSC import batch includes duplicate capture task IDs: {', '.join(duplicate_captures)}")
+        raise ValueError(
+            "MSC import batch includes duplicate capture task/reference pairs: "
+            f"{', '.join(duplicate_captures)}"
+        )
     failure_ids = [item.task_id for item in failures]
     duplicate_failures = sorted({task_id for task_id in failure_ids if failure_ids.count(task_id) > 1})
     if duplicate_failures:
@@ -179,6 +188,11 @@ def _container_references(value: str | None) -> list[str]:
     return references
 
 
+def _first_container_reference(value: str) -> str | None:
+    references = _container_references(value)
+    return references[0] if references else None
+
+
 def _list_value(payload: dict[str, object], key: str) -> list[object]:
     value = payload.get(key, [])
     if not isinstance(value, list):
@@ -193,7 +207,87 @@ def _capture_from_dict(value: object) -> MscBrowserCapture:
     capture = value.get("capture")
     if not task_id or not isinstance(capture, str) or not capture.strip():
         raise ValueError("MSC capture entries require task_id and non-empty capture")
-    return MscBrowserCapture(task_id=task_id, capture=capture)
+    reference = str(value.get("reference") or "").strip().upper() or None
+    if reference and not _CONTAINER_RE.fullmatch(reference):
+        raise ValueError("MSC capture reference must be a valid container number")
+    return MscBrowserCapture(task_id=task_id, capture=capture, reference=reference)
+
+
+def capture_reference(capture: MscBrowserCapture) -> str | None:
+    """Return the declared reference, falling back to the visible MSC result."""
+    return capture.reference or _first_container_reference(capture.capture)
+
+
+def consolidate_browser_statuses(
+    shipment: ShipmentRef,
+    captures: Iterable[tuple[MscBrowserCapture, ShipmentStatus]],
+) -> ShipmentStatus:
+    """Project a shipment only after complete, consistent per-container review."""
+    entries = list(captures)
+    if not entries:
+        raise ValueError("MSC browser review did not include a usable capture")
+
+    expected_references = _container_references(shipment.container_no)
+    expected_set = set(expected_references)
+    reviewed_references: set[str] = set()
+    for capture, status in entries:
+        reference = capture_reference(capture)
+        if reference:
+            normalized_reference = reference.upper()
+            reviewed_references.add(normalized_reference)
+            visible_containers = {value.upper() for value in status.discovered_containers}
+            if normalized_reference not in visible_containers:
+                raise ValueError(f"MSC capture for {normalized_reference} does not contain that container in the visible result")
+
+    if expected_set:
+        missing = sorted(expected_set - reviewed_references)
+        unexpected = sorted(reviewed_references - expected_set)
+        if missing or unexpected:
+            details: list[str] = []
+            if missing:
+                details.append(f"missing container capture(s): {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected container capture(s): {', '.join(unexpected)}")
+            raise ValueError("MSC browser review is incomplete: " + "; ".join(details))
+    elif shipment.expected_container_count is not None and len(entries) < shipment.expected_container_count:
+        raise ValueError(
+            "MSC browser review is incomplete: "
+            f"expected {shipment.expected_container_count} capture(s), received {len(entries)}"
+        )
+
+    statuses = [status for _, status in entries]
+    eta_values = {_canonical_datetime(status.eta_time) for status in statuses}
+    vessel_values = {_canonical_text(status.vessel_voyage) for status in statuses}
+    if len(eta_values) > 1 or len(vessel_values) > 1:
+        raise ValueError(
+            "MSC browser results disagree across containers on shipment ETA or final vessel/voyage; "
+            "no shipment fields were projected"
+        )
+
+    selected = max(
+        statuses,
+        key=lambda status: (
+            status.latest_move.event_time if status.latest_move and status.latest_move.event_time else datetime.min.replace(tzinfo=timezone.utc),
+            len(status.recent_moves),
+        ),
+    )
+    discovered: list[str] = []
+    for status in statuses:
+        for container in status.discovered_containers:
+            normalized = container.upper()
+            if normalized not in discovered:
+                discovered.append(normalized)
+    selected.discovered_containers = discovered
+    selected.container_discovery_authoritative = False
+    return selected
+
+
+def _canonical_datetime(value: datetime | None) -> str | None:
+    return value.astimezone(timezone.utc).isoformat() if value else None
+
+
+def _canonical_text(value: str | None) -> str | None:
+    return " ".join((value or "").upper().split()) or None
 
 
 def _failure_from_dict(value: object) -> MscBrowserFailure:

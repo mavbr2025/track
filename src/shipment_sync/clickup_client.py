@@ -940,6 +940,33 @@ class ClickUpClient:
         )
         return True
 
+    def report_msc_container_review_issue(self, shipment: ShipmentRef, *, error: str) -> bool:
+        """Record a non-mutating multi-container MSC review problem once."""
+        marker = "MSC Track & Trace container review"
+        try:
+            comments = self._fetch_recent_task_comments(shipment.task_id, limit=10)
+        except requests.RequestException as exc:
+            print(f"MSC review comment cooldown check skipped for task {shipment.task_id}: {exc}", file=sys.stderr)
+            comments = []
+        if any(marker in "\n".join(_comment_reference_texts(raw)) for raw in comments):
+            return False
+        self._post_comment(
+            shipment.task_id,
+            "\n".join(
+                [
+                    marker,
+                    "",
+                    "MSC results were reviewed per container but are incomplete or disagree on shipment-level tracking data.",
+                    f"Error: {error}",
+                    "Carrier source: https://www.msc.com/en/track-a-shipment",
+                    "",
+                    "No shipment fields, Last T&T Update, or workflow status were changed.",
+                    "Action required: verify every listed container with MSC, then rerun Track & Trace.",
+                ]
+            ),
+        )
+        return True
+
     def _recent_wan_hai_manual_capture_comment_exists(self, task_id: str) -> bool:
         cooldown_hours = self.settings.wan_hai_manual_capture_comment_cooldown_hours
         if cooldown_hours <= 0:
