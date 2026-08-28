@@ -116,10 +116,15 @@ def read_import_batch(path: Path) -> tuple[list[MscBrowserCapture], list[MscBrow
             "MSC import batch includes duplicate capture task/reference pairs: "
             f"{', '.join(duplicate_captures)}"
         )
-    failure_ids = [item.task_id for item in failures]
-    duplicate_failures = sorted({task_id for task_id in failure_ids if failure_ids.count(task_id) > 1})
+    failure_keys = [(item.task_id, item.reference.upper()) for item in failures]
+    duplicate_failures = sorted(
+        {task_id for task_id, reference in failure_keys if failure_keys.count((task_id, reference)) > 1}
+    )
     if duplicate_failures:
-        raise ValueError(f"MSC import batch includes duplicate failure task IDs: {', '.join(duplicate_failures)}")
+        raise ValueError(
+            "MSC import batch includes duplicate failure task/reference pairs: "
+            f"{', '.join(duplicate_failures)}"
+        )
     return captures, failures
 
 

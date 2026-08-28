@@ -133,6 +133,43 @@ def test_read_import_batch_allows_a_capture_and_diagnostic_for_one_task(tmp_path
     assert captures[0].task_id == failures[0].task_id == "task-1"
 
 
+def test_read_import_batch_allows_multiple_failed_containers_for_one_task(tmp_path) -> None:
+    path = tmp_path / "batch.json"
+    path.write_text(
+        json.dumps(
+            {
+                "failures": [
+                    {"task_id": "task-1", "reference": "MSCU1234567", "error": "No result found"},
+                    {"task_id": "task-1", "reference": "MSCU7654321", "error": "No result found"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _, failures = read_import_batch(path)
+
+    assert [failure.reference for failure in failures] == ["MSCU1234567", "MSCU7654321"]
+
+
+def test_read_import_batch_rejects_duplicate_failure_task_reference_pairs(tmp_path) -> None:
+    path = tmp_path / "batch.json"
+    path.write_text(
+        json.dumps(
+            {
+                "failures": [
+                    {"task_id": "task-1", "reference": "MSCU1234567", "error": "No result found"},
+                    {"task_id": "task-1", "reference": "MSCU1234567", "error": "Still no result"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate failure task/reference pairs"):
+        read_import_batch(path)
+
+
 def test_read_import_batch_allows_multiple_container_captures_for_one_task(tmp_path) -> None:
     path = tmp_path / "batch.json"
     path.write_text(
