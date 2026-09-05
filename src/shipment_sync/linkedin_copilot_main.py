@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .spreadsheet import spreadsheet_safe_row
+
 import argparse
 import csv
 import json
@@ -776,7 +778,7 @@ def _write_review_csv(*, selected: list[DraftRecord], destination: Path) -> None
         writer.writeheader()
         for row in selected:
             writer.writerow(
-                {
+                spreadsheet_safe_row({
                     "id": row.id,
                     "full_name": row.full_name,
                     "linkedin_url": row.linkedin_url,
@@ -792,7 +794,7 @@ def _write_review_csv(*, selected: list[DraftRecord], destination: Path) -> None
                     "edited_message": "",
                     "edited_comment": "",
                     "notes": "",
-                }
+                })
             )
 
 
@@ -803,7 +805,7 @@ def _write_filtered_csv(*, records: list[FilteredOutRecord], destination: Path) 
         writer.writeheader()
         for row in records:
             writer.writerow(
-                {
+                spreadsheet_safe_row({
                     "id": row.id,
                     "full_name": row.full_name,
                     "linkedin_url": row.linkedin_url,
@@ -812,7 +814,7 @@ def _write_filtered_csv(*, records: list[FilteredOutRecord], destination: Path) 
                     "company": row.company or "",
                     "position": row.position or "",
                     "connected_on": row.connected_on or "",
-                }
+                })
             )
 
 
@@ -852,7 +854,7 @@ def _build_approved_queue(approval_file: Path, *, output_dir: Path, timestamp: s
     with destination.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=headers)
         writer.writeheader()
-        writer.writerows(approved_rows)
+        writer.writerows((spreadsheet_safe_row(row) for row in approved_rows))
 
     print(f"Approved rows: {len(approved_rows)}")
     return destination

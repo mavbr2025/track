@@ -10,6 +10,8 @@ import requests
 
 from shipment_sync.carriers.base import CarrierAdapter
 from shipment_sync.carriers.common import (
+    bounded_response_bytes,
+    bounded_response_json,
     extract_container_numbers,
     extract_event_vessel_voyage,
     extract_event_state_hint,
@@ -21,6 +23,16 @@ from shipment_sync.carriers.common import (
     to_dcsa_movement_name,
 )
 from shipment_sync.models import MovementEvent, ShipmentRef, ShipmentStatus
+
+
+def _bound_edh_response(response: requests.Response, **kwargs: Any) -> requests.Response:
+    """Bound each response before Requests consumes intermediate redirect bodies."""
+    try:
+        bounded_response_bytes(response)
+    except Exception:
+        response.close()
+        raise
+    return response
 
 
 class OneAdapter(CarrierAdapter):
@@ -131,9 +143,15 @@ class OneAdapter(CarrierAdapter):
         }
 
         try:
-            response = self.session.post(search_url, json=payload, timeout=self.timeout_seconds)
-            response.raise_for_status()
-            search_result = response.json()
+            response = self.session.post(
+                search_url, json=payload, timeout=self.timeout_seconds, stream=True,
+                hooks={"response": _bound_edh_response},
+            )
+            try:
+                response.raise_for_status()
+                search_result = bounded_response_json(response)
+            finally:
+                response.close()
         except Exception:
             return None
 
@@ -253,9 +271,14 @@ class OneAdapter(CarrierAdapter):
                 url,
                 params={"booking_no": booking_no},
                 timeout=self.timeout_seconds,
+                stream=True,
+                hooks={"response": _bound_edh_response},
             )
-            response.raise_for_status()
-            payload = response.json()
+            try:
+                response.raise_for_status()
+                payload = bounded_response_json(response)
+            finally:
+                response.close()
         except Exception:
             return []
 
@@ -275,9 +298,14 @@ class OneAdapter(CarrierAdapter):
                 url,
                 params={"booking_no": booking_no, "container_no": container_no},
                 timeout=self.timeout_seconds,
+                stream=True,
+                hooks={"response": _bound_edh_response},
             )
-            response.raise_for_status()
-            payload = response.json()
+            try:
+                response.raise_for_status()
+                payload = bounded_response_json(response)
+            finally:
+                response.close()
         except Exception:
             return []
 
