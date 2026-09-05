@@ -32,10 +32,10 @@ def _settings(**overrides: object) -> DocumentIntegrationSettings:
 
 
 def _client(settings: DocumentIntegrationSettings, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    monkeypatch.setenv("SHIPMENT_API_TRIGGER_TOKEN", "")
+    monkeypatch.setenv("SHIPMENT_API_TRIGGER_TOKEN", "test-operator-token")
     app = create_app()
     app.dependency_overrides[_get_document_settings] = lambda: settings
-    return TestClient(app)
+    return TestClient(app, headers={"X-Trigger-Token": "test-operator-token"})
 
 
 def test_nda_dry_run_builds_docuseal_submission_payload(monkeypatch: pytest.MonkeyPatch) -> None:
